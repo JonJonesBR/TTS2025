@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Audiobook Gratuito</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f7f6;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            max-width: 600px;
+            margin: auto;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            border: 1px solid #e0e0e0;
+        }
+        h1 {
+            color: #2c3e50;
+            font-size: 1.8em;
+            margin-bottom: 15px;
+        }
+        p {
+            font-size: 1.1em;
+            color: #555;
+            margin-bottom: 25px;
+            line-height: 1.6;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #444;
+        }
+        select, input[type="file"] {
+            width: calc(100% - 20px);
+            padding: 10px;
+            margin: 0 auto 20px auto;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 1em;
+            background-color: #e9ecef;
+            cursor: pointer;
+            box-sizing: border-box; /* Para incluir padding na largura */
+        }
+        button {
+            padding: 12px 25px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1.1em;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            box-shadow: 0 2px 5px rgba(0, 123, 255, 0.2);
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+            transform: translateY(-2px);
+        }
+        button:active {
+            transform: translateY(0);
+            box-shadow: none;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        .message, .error {
+            margin-top: 25px;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: bold;
+            display: none; /* Escondido por padrão */
+            word-wrap: break-word;
+        }
+        .message {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        /* Estilos para a barra de progresso */
+        .progress-container {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 20px;
+            height: 25px; /* Aumenta a altura para caber o texto */
+            display: none; /* Escondido por padrão */
+            position: relative;
+        }
+        .progress-bar {
+            height: 100%;
+            background-color: #007bff;
+            width: 0; /* Inicia com 0% */
+            border-radius: 5px;
+            transition: width 0.5s ease-in-out; /* Suaviza a transição da largura */
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+        .progress-text {
+            position: absolute;
+            width: 100%;
+            text-align: center;
+            line-height: 25px; /* Centraliza o texto verticalmente */
+            color: white; /* Texto branco sobre a barra */
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+            z-index: 1; /* Garante que o texto esteja acima da barra */
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+                padding: 20px;
+            }
+            h1 {
+                font-size: 1.5em;
+            }
+            p {
+                font-size: 0.95em;
+            }
+            button {
+                padding: 10px 20px;
+                font-size: 1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Crie seu Audiobook Gratuitamente</h1>
+        <p>Faça o upload de um arquivo PDF, TXT, EPUB, DOC/DOCX e converta-o em audiobook em segundos.</p>
+
+        <form id="uploadForm" enctype="multipart/form-data">
+            <label for="voiceSelect">Escolha a Voz:</label>
+            <select id="voiceSelect" name="voice">
+                </select>
+            <br><br>
+            <input type="file" name="file" id="fileInput" accept=".pdf,.txt,.epub,.doc,.docx">
+            <button type="submit" id="submitButton">Gerar Audiobook</button>
+        </form>
+
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar" id="progressBar"></div>
+            <div class="progress-text" id="progressText">Aguardando...</div>
+        </div>
+        <div id="message" class="message"></div>
+        <div id="error" class="error"></div>
+    </div>
+
+    <script>
+        const uploadForm = document.getElementById('uploadForm');
+        const fileInput = document.getElementById('fileInput');
+        const voiceSelect = document.getElementById('voiceSelect');
+        const messageDiv = document.getElementById('message');
+        const errorDiv = document.getElementById('error');
+        const submitButton = document.getElementById('submitButton');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+
+        let pollingInterval;
+        let startTime;
+
+        // Função para exibir mensagem de status e controlar a barra de progresso
+        function showStatus(text, isError = false, progress = null, messageDetail = '') {
+            messageDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+            progressContainer.style.display = 'none';
+            progressText.textContent = ''; // Limpa texto de progresso
+
+            if (isError) {
+                errorDiv.textContent = text;
+                errorDiv.style.display = 'block';
+            } else {
+                messageDiv.textContent = text;
+                messageDiv.style.display = 'block';
+
+                if (progress !== null && progress >= 0 && progress <= 100) {
+                    progressContainer.style.display = 'block';
+                    progressBar.style.width = `${progress}%`;
+                    let timeElapsed = 0;
+                    if (startTime) {
+                        timeElapsed = (Date.now() - startTime) / 1000; // Tempo em segundos
+                    }
+                    progressText.textContent = `${messageDetail} (${progress}%) - Tempo: ${timeElapsed.toFixed(1)}s`;
+                }
+            }
+        }
+
+        // Função para carregar as vozes disponíveis
+        async function loadVoices() {
+            try {
+                const response = await fetch('/voices');
+                if (response.ok) {
+                    const voices = await response.json();
+                    voiceSelect.innerHTML = ''; // Limpa opções existentes
+                    for (const code in voices) {
+                        const option = document.createElement('option');
+                        option.value = code;
+                        option.textContent = voices[code];
+                        voiceSelect.appendChild(option);
+                    }
+                    // Seleciona a Thalita Multilingual Neural por padrão se estiver disponível
+                    if (voices["pt-BR-ThalitaMultilingualNeural"]) {
+                        voiceSelect.value = "pt-BR-ThalitaMultilingualNeural";
+                    }
+                } else {
+                    showStatus('Erro ao carregar vozes. Tente recarregar a página.', true);
+                }
+            } catch (error) {
+                console.error('Erro ao carregar vozes:', error);
+                showStatus('Erro de conexão ao carregar vozes. Verifique o servidor.', true);
+            }
+        }
+
+        // Carrega as vozes ao carregar a página
+        document.addEventListener('DOMContentLoaded', loadVoices);
+
+        uploadForm.addEventListener('submit', async function(event) {
+            event.preventDefault(); // Impede o envio padrão do formulário
+
+            showStatus(''); // Limpa mensagens e esconde barra
+            clearInterval(pollingInterval); // Limpa qualquer polling anterior
+
+            if (fileInput.files.length === 0) {
+                showStatus('Por favor, selecione um arquivo.', true);
+                return;
+            }
+
+            const selectedVoice = voiceSelect.value;
+            if (!selectedVoice) {
+                showStatus('Por favor, selecione uma voz.', true);
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('voice', selectedVoice);
+
+            showStatus('Enviando arquivo e iniciando processamento...', false, 0, 'Iniciando...');
+            submitButton.disabled = true;
+
+            try {
+                // Inicia o processo no backend
+                const processResponse = await fetch('/process_file', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!processResponse.ok) {
+                    const errorText = await processResponse.text();
+                    showStatus(`Erro ao iniciar processamento: ${errorText}`, true);
+                    return;
+                }
+
+                const processResult = await processResponse.json();
+                const taskId = processResult.task_id;
+                startTime = Date.now(); // Inicia o contador de tempo
+
+                showStatus('Processamento iniciado. Verificando progresso...', false, 0, 'Iniciando...');
+
+                // Inicia o polling para verificar o status
+                pollingInterval = setInterval(async () => {
+                    try {
+                        const statusResponse = await fetch(`/status/${taskId}`);
+                        if (!statusResponse.ok) {
+                            clearInterval(pollingInterval);
+                            showStatus('Erro ao verificar status da conversão. Tente novamente.', true);
+                            return;
+                        }
+
+                        const statusResult = await statusResponse.json();
+                        const { status, progress, message } = statusResult;
+
+                        showStatus(message, false, progress, message); // Atualiza mensagem e barra
+
+                        if (status === 'completed') {
+                            clearInterval(pollingInterval);
+                            showStatus('Audiobook pronto! Iniciando download...', false, 100, 'Download pronto!');
+
+                            // Aciona o download
+                            const downloadUrl = `/download/${taskId}`;
+                            const a = document.createElement('a');
+                            a.style.display = 'none';
+                            a.href = downloadUrl;
+                            a.download = fileInput.files[0].name.split('.').slice(0, -1).join('.') + '.mp3';
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a); // Remove o elemento 'a' após o clique
+
+                            showStatus('Download concluído!', false, 100, 'Concluído!');
+                        } else if (status === 'failed') {
+                            clearInterval(pollingInterval);
+                            showStatus(`Conversão falhou: ${message}`, true);
+                        }
+                    } catch (error) {
+                        clearInterval(pollingInterval);
+                        console.error('Erro no polling de status:', error);
+                        showStatus('Ocorreu um erro na comunicação com o servidor durante o progresso. Tente novamente.', true);
+                    }
+                }, 2000); // Poll a cada 2 segundos
+
+            } catch (error) {
+                console.error('Erro na requisição inicial:', error);
+                showStatus('Ocorreu um erro na comunicação com o servidor. Verifique sua conexão ou tente novamente.', true);
+            } finally {
+                // O botão só será reabilitado quando o download iniciar/erro acontecer
+                // ou se o polling for cancelado por um erro.
+                // Não desabilitamos aqui para permitir o fluxo de polling.
+            }
+        });
+    </script>
+</body>
+</html>
