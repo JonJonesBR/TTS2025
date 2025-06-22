@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import os
@@ -9,26 +10,28 @@ from PyPDF2 import PdfReader
 from docx import Document
 from ebooklib import epub
 from bs4 import BeautifulSoup
-import traceback # Para depuração
-import json # Para cachear as vozes
-import uuid # Para gerar IDs de tarefas
+import traceback
+import json
+import uuid
+
+import nest_asyncio
+
+nest_asyncio.apply()
 
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Cache para armazenar as vozes após a primeira busca
 cached_voices = {}
-
-# Dicionário para armazenar o status das tarefas de conversão
-# Estrutura: {task_id: {"status": "pending"|"extracting"|"converting"|"completed"|"failed", "progress": 0-100, "message": "...", "file_path": "...", "total_characters": 0}}
 conversion_tasks = {}
+NGROK_AUTH_TOKEN = None
+PUBLIC_NGROK_URL = None
 
-# Função para extrair texto de diferentes tipos de arquivo
+
 async def get_text_from_file(file_path: str, task_id: str):
     text = ""
     filename = os.path.basename(file_path)
-    total_parts = 1 # Usado para cálculo de progresso geral
+    total_parts = 1
 
     try:
         if filename.endswith('.pdf'):
@@ -38,9 +41,9 @@ async def get_text_from_file(file_path: str, task_id: str):
                 extracted_page_text = page.extract_text()
                 if extracted_page_text:
                     text += extracted_page_text + "\n"
-                progress = int(((i + 1) / total_parts) * 50) # 50% para extração
+                progress = int(((i + 1) / total_parts) * 50)
                 conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Página {i+1}/{total_parts})..."})
-                await asyncio.sleep(0.01) # Pequena pausa para permitir atualizações de status
+                await asyncio.sleep(0.01)
         elif filename.endswith('.txt'):
             with open(file_path, 'r', encoding='utf-8') as f:
                 text = f.read()
@@ -72,7 +75,6 @@ async def get_text_from_file(file_path: str, task_id: str):
         conversion_tasks[task_id].update({"status": "failed", "message": f"Erro na extração de texto: {str(e)}"})
         raise
 
-# Função para obter vozes disponíveis do Edge TTS com cache
 async def get_available_voices():
     global cached_voices
     if cached_voices:
@@ -116,7 +118,6 @@ async def get_available_voices():
             "pt-BR-AntonioNeural": "Antonio (Masculina, Neural) - Fallback"
         }
 
-# Função de tarefa de background para realizar a conversão
 async def perform_conversion_task(task_id: str, file_path: str, voice: str):
     try:
         conversion_tasks[task_id].update({"status": "extracting", "message": "Iniciando extração de texto...", "progress": 0})
@@ -159,38 +160,32 @@ async def perform_conversion_task(task_id: str, file_path: str, voice: str):
         print(traceback.format_exc())
         conversion_tasks[task_id].update({"status": "failed", "message": f"Erro na conversão: {str(e)}"})
     finally:
-        # Remove o arquivo de texto temporário após processamento
         if os.path.exists(file_path):
             os.remove(file_path)
             print(f"Arquivo de texto temporário {os.path.basename(file_path)} removido.")
 
-# Rota principal que serve o arquivo HTML do frontend
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     with open("static/index.html", "r", encoding="utf-8") as f:
         return f.read()
 
-# Rota para obter as vozes disponíveis para o frontend
 @app.get("/voices", response_class=JSONResponse)
 async def list_voices_endpoint():
     voices = await get_available_voices()
     return voices
 
-# Novo endpoint para iniciar o processamento em background
 @app.post("/process_file")
 async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-BR-ThalitaMultilingualNeural", background_tasks: BackgroundTasks = BackgroundTasks()):
-    # Validações
+    
     current_available_voices = await get_available_voices()
     if voice not in current_available_voices:
         raise HTTPException(status_code=400, detail=f"Voz '{voice}' não é válida. Escolha uma das opções disponíveis.")
     if not file.filename:
         raise HTTPException(status_code=400, detail="Nenhum arquivo enviado.")
 
-    # Gera um ID único para a tarefa
     task_id = str(uuid.uuid4())
     temp_input_filepath = os.path.join("uploads", f"{task_id}_{file.filename}")
 
-    # Salva o arquivo enviado temporariamente
     try:
         content = await file.read()
         with open(temp_input_filepath, "wb") as f:
@@ -198,7 +193,6 @@ async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-B
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo temporário: {str(e)}")
 
-    # Inicializa o status da tarefa
     conversion_tasks[task_id] = {
         "status": "pending",
         "progress": 0,
@@ -207,12 +201,10 @@ async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-B
         "total_characters": 0
     }
 
-    # Adiciona a tarefa de conversão para ser executada em background
     background_tasks.add_task(perform_conversion_task, task_id, temp_input_filepath, voice)
 
     return JSONResponse({"task_id": task_id, "message": "Processamento iniciado. Use o endpoint /status para verificar o progresso."})
 
-# Novo endpoint para verificar o status da conversão
 @app.get("/status/{task_id}")
 async def get_conversion_status(task_id: str):
     status = conversion_tasks.get(task_id)
@@ -220,9 +212,8 @@ async def get_conversion_status(task_id: str):
         raise HTTPException(status_code=404, detail="ID da tarefa não encontrado ou tarefa já concluída e limpa.")
     return JSONResponse(status)
 
-# Novo endpoint para download do arquivo final
 @app.get("/download/{task_id}")
-async def download_audiobook(task_id: str, background_tasks: BackgroundTasks): # MUDANÇA AQUI: Recebe background_tasks
+async def download_audiobook(task_id: str, background_tasks: BackgroundTasks):
     status = conversion_tasks.get(task_id)
     if not status or status["status"] != "completed" or not status["file_path"] or not os.path.exists(status["file_path"]):
         print(f"Tentativa de download para tarefa {task_id} falhou. Status: {status}")
@@ -231,15 +222,12 @@ async def download_audiobook(task_id: str, background_tasks: BackgroundTasks): #
     audio_filepath = status["file_path"]
     filename = os.path.basename(audio_filepath)
 
-    # MUDANÇA AQUI: Passa background_tasks diretamente para FileResponse
     response = FileResponse(audio_filepath, media_type="audio/mpeg", filename=filename, background=background_tasks)
 
-    # MUDANÇA AQUI: Adiciona a tarefa de limpeza DIRETAMENTE ao background_tasks que será passado
     background_tasks.add_task(cleanup_file_after_download, audio_filepath, task_id)
 
     return response
 
-# Função de limpeza para ser usada como background_task
 async def cleanup_file_after_download(file_path: str, task_id: str):
     print(f"Iniciando limpeza do arquivo temporário: {file_path}")
     if os.path.exists(file_path):
