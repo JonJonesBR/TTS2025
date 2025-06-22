@@ -27,618 +27,777 @@ os.makedirs("static", exist_ok=True) # Para o frontend
 
 # Commented out IPython magic to ensure Python compatibility.
 # # Célula 3: Criar o arquivo main.py (com voz Thalita e rota de vozes DINÂMICA)
-# %%writefile main.py
-# from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
-# from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-# from fastapi.staticfiles import StaticFiles
-# import os
-# import io
-# import asyncio
-# import edge_tts
-# from PyPDF2 import PdfReader
-# from docx import Document
-# from ebooklib import epub
-# from bs4 import BeautifulSoup
-# import traceback # Para depuração
-# import json # Para cachear as vozes
-# import uuid # Para gerar IDs de tarefas
-# 
-# app = FastAPI()
-# 
-# app.mount("/static", StaticFiles(directory="static"), name="static")
-# 
-# # Cache para armazenar as vozes após a primeira busca
-# cached_voices = {}
-# 
-# # Dicionário para armazenar o status das tarefas de conversão
-# # Estrutura: {task_id: {"status": "pending"|"extracting"|"converting"|"completed"|"failed", "progress": 0-100, "message": "...", "file_path": "...", "total_characters": 0}}
-# conversion_tasks = {}
-# 
-# # Função para extrair texto de diferentes tipos de arquivo
-# async def get_text_from_file(file_path: str, task_id: str):
-#     text = ""
-#     filename = os.path.basename(file_path)
-#     total_parts = 1 # Usado para cálculo de progresso geral
-# 
-#     try:
-#         if filename.endswith('.pdf'):
-#             reader = PdfReader(file_path)
-#             total_parts = len(reader.pages)
-#             for i, page in enumerate(reader.pages):
-#                 extracted_page_text = page.extract_text()
-#                 if extracted_page_text:
-#                     text += extracted_page_text + "\n"
-#                 progress = int(((i + 1) / total_parts) * 50) # 50% para extração
-#                 conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Página {i+1}/{total_parts})..."})
-#                 await asyncio.sleep(0.01) # Pequena pausa para permitir atualizações de status
-#         elif filename.endswith('.txt'):
-#             with open(file_path, 'r', encoding='utf-8') as f:
-#                 text = f.read()
-#             conversion_tasks[task_id].update({"progress": 50, "message": "Texto de arquivo TXT lido."})
-#         elif filename.endswith('.docx'):
-#             doc = Document(file_path)
-#             total_parts = len(doc.paragraphs)
-#             for i, paragraph in enumerate(doc.paragraphs):
-#                 text += paragraph.text + "\n"
-#                 progress = int(((i + 1) / total_parts) * 50)
-#                 conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Parágrafo {i+1}/{total_parts})..."})
-#                 await asyncio.sleep(0.01)
-#         elif filename.endswith('.epub'):
-#             book = epub.read_epub(file_path)
-#             document_items = [item for item in book.get_items() if item.get_type() == epub.ITEM_DOCUMENT]
-#             total_parts = len(document_items)
-#             for i, item in enumerate(document_items):
-#                 soup = BeautifulSoup(item.get_content(), 'html.parser')
-#                 text += soup.get_text(separator='\n') + "\n"
-#                 progress = int(((i + 1) / total_parts) * 50)
-#                 conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Capítulo {i+1}/{total_parts})..."})
-#                 await asyncio.sleep(0.01)
-# 
-#         conversion_tasks[task_id].update({"progress": 50, "message": "Extração de texto concluída."})
-#         print(f"Extração de texto para {filename} concluída. Total de caracteres: {len(text)}.")
-#         return text.strip()
-#     except Exception as e:
-#         print(f"Erro na extração de texto de {filename}: {e}")
-#         conversion_tasks[task_id].update({"status": "failed", "message": f"Erro na extração de texto: {str(e)}"})
-#         raise
-# 
-# # Função para obter vozes disponíveis do Edge TTS com cache
-# async def get_available_voices():
-#     global cached_voices
-#     if cached_voices:
-#         return cached_voices
-# 
-#     print("Buscando vozes Edge TTS disponíveis...")
-#     try:
-#         voices = await edge_tts.list_voices()
-#         pt_br_voices = {}
-#         for voice in voices:
-#             if voice["Locale"] == "pt-BR":
-#                 name = voice["ShortName"].replace("pt-BR-", "")
-#                 name = name.replace("Neural", " (Neural)")
-#                 if voice["Gender"] == "Female":
-#                     name = f"{name} (Feminina)"
-#                 elif voice["Gender"] == "Male":
-#                     name = f"{name} (Masculina)"
-#                 pt_br_voices[voice["ShortName"]] = name.strip()
-# 
-#         ordered_voices = {}
-#         if "pt-BR-ThalitaMultilingualNeural" in pt_br_voices:
-#             ordered_voices["pt-BR-ThalitaMultilingualNeural"] = pt_br_voices["pt-BR-ThalitaMultilingualNeural"]
-#         if "pt-BR-FranciscaNeural" in pt_br_voices:
-#             ordered_voices["pt-BR-FranciscaNeural"] = pt_br_voices["pt-BR-FranciscaNeural"]
-#         if "pt-BR-AntonioNeural" in pt_br_voices:
-#             ordered_voices["pt-BR-AntonioNeural"] = pt_br_voices["pt-BR-AntonioNeural"]
-# 
-#         for code, name in pt_br_voices.items():
-#             if code not in ordered_voices:
-#                 ordered_voices[code] = name
-# 
-#         cached_voices = ordered_voices
-#         print(f"Vozes carregadas: {len(cached_voices)} opções.")
-#         return cached_voices
-#     except Exception as e:
-#         print(f"Erro ao obter vozes Edge TTS: {e}")
-#         print(traceback.format_exc())
-#         return {
-#             "pt-BR-ThalitaMultilingualNeural": "Thalita (Feminina, Neural) - Fallback",
-#             "pt-BR-FranciscaNeural": "Francisca (Feminina, Neural) - Fallback",
-#             "pt-BR-AntonioNeural": "Antonio (Masculina, Neural) - Fallback"
-#         }
-# 
-# # Função de tarefa de background para realizar a conversão
-# async def perform_conversion_task(task_id: str, file_path: str, voice: str):
-#     try:
-#         conversion_tasks[task_id].update({"status": "extracting", "message": "Iniciando extração de texto...", "progress": 0})
-#         text = await get_text_from_file(file_path, task_id)
-# 
-#         if not text:
-#             conversion_tasks[task_id].update({"status": "failed", "message": "Não foi possível extrair texto do arquivo."})
-#             return
-# 
-#         audio_filename = os.path.splitext(os.path.basename(file_path))[0] + ".mp3"
-#         audio_filepath = os.path.join("audiobooks", audio_filename)
-#         conversion_tasks[task_id]["file_path"] = audio_filepath
-#         conversion_tasks[task_id]["total_characters"] = len(text)
-# 
-#         print(f"Iniciando geração de áudio com Edge TTS (Voz: {voice}) para {len(text)} caracteres...")
-#         conversion_tasks[task_id].update({"status": "converting", "message": "Convertendo texto em áudio...", "progress": 50})
-# 
-#         communicate = edge_tts.Communicate(text, voice)
-#         audio_data_bytes = b""
-#         chunk_counter = 0
-# 
-#         async for chunk in communicate.stream():
-#             if chunk["type"] == "audio":
-#                 audio_data_bytes += chunk["data"]
-#                 chunk_counter += 1
-#                 progress_tts = int(50 + (chunk_counter / 500) * 50)
-#                 progress_tts = min(progress_tts, 99)
-#                 conversion_tasks[task_id].update({"progress": progress_tts, "message": f"Gerando áudio ({progress_tts-50}% concluído)..."})
-#                 await asyncio.sleep(0.001)
-#             elif chunk["type"] == "end":
-#                 print(f"Fim do stream TTS para tarefa {task_id}.")
-# 
-#         with open(audio_filepath, "wb") as out:
-#             out.write(audio_data_bytes)
-#         print(f"Áudio para tarefa {task_id} gerado e salvo em {audio_filepath}.")
-# 
-#         conversion_tasks[task_id].update({"status": "completed", "message": "Audiobook pronto para download!", "progress": 100})
-#     except Exception as e:
-#         print(f"Erro na conversão da tarefa {task_id}: {e}")
-#         print(traceback.format_exc())
-#         conversion_tasks[task_id].update({"status": "failed", "message": f"Erro na conversão: {str(e)}"})
-#     finally:
-#         # Remove o arquivo de texto temporário após processamento
-#         if os.path.exists(file_path):
-#             os.remove(file_path)
-#             print(f"Arquivo de texto temporário {os.path.basename(file_path)} removido.")
-# 
-# # Rota principal que serve o arquivo HTML do frontend
-# @app.get("/", response_class=HTMLResponse)
-# async def read_root():
-#     with open("static/index.html", "r", encoding="utf-8") as f:
-#         return f.read()
-# 
-# # Rota para obter as vozes disponíveis para o frontend
-# @app.get("/voices", response_class=JSONResponse)
-# async def list_voices_endpoint():
-#     voices = await get_available_voices()
-#     return voices
-# 
-# # Novo endpoint para iniciar o processamento em background
-# @app.post("/process_file")
-# async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-BR-ThalitaMultilingualNeural", background_tasks: BackgroundTasks = BackgroundTasks()):
-#     # Validações
-#     current_available_voices = await get_available_voices()
-#     if voice not in current_available_voices:
-#         raise HTTPException(status_code=400, detail=f"Voz '{voice}' não é válida. Escolha uma das opções disponíveis.")
-#     if not file.filename:
-#         raise HTTPException(status_code=400, detail="Nenhum arquivo enviado.")
-# 
-#     # Gera um ID único para a tarefa
-#     task_id = str(uuid.uuid4())
-#     temp_input_filepath = os.path.join("uploads", f"{task_id}_{file.filename}")
-# 
-#     # Salva o arquivo enviado temporariamente
-#     try:
-#         content = await file.read()
-#         with open(temp_input_filepath, "wb") as f:
-#             f.write(content)
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo temporário: {str(e)}")
-# 
-#     # Inicializa o status da tarefa
-#     conversion_tasks[task_id] = {
-#         "status": "pending",
-#         "progress": 0,
-#         "message": "Tarefa iniciada, aguardando processamento...",
-#         "file_path": None,
-#         "total_characters": 0
-#     }
-# 
-#     # Adiciona a tarefa de conversão para ser executada em background
-#     background_tasks.add_task(perform_conversion_task, task_id, temp_input_filepath, voice)
-# 
-#     return JSONResponse({"task_id": task_id, "message": "Processamento iniciado. Use o endpoint /status para verificar o progresso."})
-# 
-# # Novo endpoint para verificar o status da conversão
-# @app.get("/status/{task_id}")
-# async def get_conversion_status(task_id: str):
-#     status = conversion_tasks.get(task_id)
-#     if not status:
-#         raise HTTPException(status_code=404, detail="ID da tarefa não encontrado ou tarefa já concluída e limpa.")
-#     return JSONResponse(status)
-# 
-# # Novo endpoint para download do arquivo final
-# @app.get("/download/{task_id}")
-# async def download_audiobook(task_id: str, background_tasks: BackgroundTasks): # MUDANÇA AQUI: Recebe background_tasks
-#     status = conversion_tasks.get(task_id)
-#     if not status or status["status"] != "completed" or not status["file_path"] or not os.path.exists(status["file_path"]):
-#         print(f"Tentativa de download para tarefa {task_id} falhou. Status: {status}")
-#         raise HTTPException(status_code=404, detail="Audiobook não encontrado ou ainda não pronto para download.")
-# 
-#     audio_filepath = status["file_path"]
-#     filename = os.path.basename(audio_filepath)
-# 
-#     # MUDANÇA AQUI: Passa background_tasks diretamente para FileResponse
-#     response = FileResponse(audio_filepath, media_type="audio/mpeg", filename=filename, background=background_tasks)
-# 
-#     # MUDANÇA AQUI: Adiciona a tarefa de limpeza DIRETAMENTE ao background_tasks que será passado
-#     background_tasks.add_task(cleanup_file_after_download, audio_filepath, task_id)
-# 
-#     return response
-# 
-# # Função de limpeza para ser usada como background_task
-# async def cleanup_file_after_download(file_path: str, task_id: str):
-#     print(f"Iniciando limpeza do arquivo temporário: {file_path}")
-#     if os.path.exists(file_path):
-#         os.remove(file_path)
-#         print(f"Arquivo temporário {file_path} removido com sucesso.")
-#     else:
-#         print(f"Arquivo temporário {file_path} não encontrado para remoção (já removido?).")
-# 
-#     if task_id in conversion_tasks:
-#         del conversion_tasks[task_id]
-#         print(f"Status da tarefa {task_id} removido.")
-#
+%%writefile main.py
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form # Adicionado 'Form'
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+import os
+import io
+import asyncio
+import edge_tts
+from PyPDF2 import PdfReader
+from docx import Document
+from ebooklib import epub
+from bs4 import BeautifulSoup
+import traceback
+import json
+import uuid
+
+# Importa a biblioteca ngrok, mas NÃO vamos definir o token aqui inicialmente
+from pyngrok import ngrok # Importa ngrok
+import nest_asyncio # Para o uvicorn no Colab
+
+# Aplica nest_asyncio para o uvicorn
+nest_asyncio.apply()
+
+app = FastAPI()
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Cache para armazenar as vozes após a primeira busca
+cached_voices = {}
+
+# Dicionário para armazenar o status das tarefas de conversão
+conversion_tasks = {}
+
+# Variável global para armazenar o token ngrok e o túnel
+NGROK_AUTH_TOKEN = None
+PUBLIC_NGROK_URL = None
+
+
+# Função para extrair texto de diferentes tipos de arquivo
+async def get_text_from_file(file_path: str, task_id: str):
+    text = ""
+    filename = os.path.basename(file_path)
+    total_parts = 1
+
+    try:
+        if filename.endswith('.pdf'):
+            reader = PdfReader(file_path)
+            total_parts = len(reader.pages)
+            for i, page in enumerate(reader.pages):
+                extracted_page_text = page.extract_text()
+                if extracted_page_text:
+                    text += extracted_page_text + "\n"
+                progress = int(((i + 1) / total_parts) * 50)
+                conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Página {i+1}/{total_parts})..."})
+                await asyncio.sleep(0.01)
+        elif filename.endswith('.txt'):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            conversion_tasks[task_id].update({"progress": 50, "message": "Texto de arquivo TXT lido."})
+        elif filename.endswith('.docx'):
+            doc = Document(file_path)
+            total_parts = len(doc.paragraphs)
+            for i, paragraph in enumerate(doc.paragraphs):
+                text += paragraph.text + "\n"
+                progress = int(((i + 1) / total_parts) * 50)
+                conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Parágrafo {i+1}/{total_parts})..."})
+                await asyncio.sleep(0.01)
+        elif filename.endswith('.epub'):
+            book = epub.read_epub(file_path)
+            document_items = [item for item in book.get_items() if item.get_type() == epub.ITEM_DOCUMENT]
+            total_parts = len(document_items)
+            for i, item in enumerate(document_items):
+                soup = BeautifulSoup(item.get_content(), 'html.parser')
+                text += soup.get_text(separator='\n') + "\n"
+                progress = int(((i + 1) / total_parts) * 50)
+                conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Capítulo {i+1}/{total_parts})..."})
+                await asyncio.sleep(0.01)
+
+        conversion_tasks[task_id].update({"progress": 50, "message": "Extração de texto concluída."})
+        print(f"Extração de texto para {filename} concluída. Total de caracteres: {len(text)}.")
+        return text.strip()
+    except Exception as e:
+        print(f"Erro na extração de texto de {filename}: {e}")
+        conversion_tasks[task_id].update({"status": "failed", "message": f"Erro na extração de texto: {str(e)}"})
+        raise
+
+# Função para obter vozes disponíveis do Edge TTS com cache
+async def get_available_voices():
+    global cached_voices
+    if cached_voices:
+        return cached_voices
+
+    print("Buscando vozes Edge TTS disponíveis...")
+    try:
+        voices = await edge_tts.list_voices()
+        pt_br_voices = {}
+        for voice in voices:
+            if voice["Locale"] == "pt-BR":
+                name = voice["ShortName"].replace("pt-BR-", "")
+                name = name.replace("Neural", " (Neural)")
+                if voice["Gender"] == "Female":
+                    name = f"{name} (Feminina)"
+                elif voice["Gender"] == "Male":
+                    name = f"{name} (Masculina)"
+                pt_br_voices[voice["ShortName"]] = name.strip()
+
+        ordered_voices = {}
+        if "pt-BR-ThalitaMultilingualNeural" in pt_br_voices:
+            ordered_voices["pt-BR-ThalitaMultilingualNeural"] = pt_br_voices["pt-BR-ThalitaMultilingualNeural"]
+        if "pt-BR-FranciscaNeural" in pt_br_voices:
+            ordered_voices["pt-BR-FranciscaNeural"] = pt_br_voices["pt-BR-FranciscaNeural"]
+        if "pt-BR-AntonioNeural" in pt_br_voices:
+            ordered_voices["pt-BR-AntonioNeural"] = pt_br_voices["pt-BR-AntonioNeural"]
+
+        for code, name in pt_br_voices.items():
+            if code not in ordered_voices:
+                ordered_voices[code] = name
+
+        cached_voices = ordered_voices
+        print(f"Vozes carregadas: {len(cached_voices)} opções.")
+        return cached_voices
+    except Exception as e:
+        print(f"Erro ao obter vozes Edge TTS: {e}")
+        print(traceback.format_exc())
+        return {
+            "pt-BR-ThalitaMultilingualNeural": "Thalita (Feminina, Neural) - Fallback",
+            "pt-BR-FranciscaNeural": "Francisca (Feminina, Neural) - Fallback",
+            "pt-BR-AntonioNeural": "Antonio (Masculina, Neural) - Fallback"
+        }
+
+# Função de tarefa de background para realizar a conversão
+async def perform_conversion_task(task_id: str, file_path: str, voice: str):
+    try:
+        conversion_tasks[task_id].update({"status": "extracting", "message": "Iniciando extração de texto...", "progress": 0})
+        text = await get_text_from_file(file_path, task_id)
+
+        if not text:
+            conversion_tasks[task_id].update({"status": "failed", "message": "Não foi possível extrair texto do arquivo."})
+            return
+
+        audio_filename = os.path.splitext(os.path.basename(file_path))[0] + ".mp3"
+        audio_filepath = os.path.join("audiobooks", audio_filename)
+        conversion_tasks[task_id]["file_path"] = audio_filepath
+        conversion_tasks[task_id]["total_characters"] = len(text)
+
+        print(f"Iniciando geração de áudio com Edge TTS (Voz: {voice}) para {len(text)} caracteres...")
+        conversion_tasks[task_id].update({"status": "converting", "message": "Convertendo texto em áudio...", "progress": 50})
+
+        communicate = edge_tts.Communicate(text, voice)
+        audio_data_bytes = b""
+        chunk_counter = 0
+
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_data_bytes += chunk["data"]
+                chunk_counter += 1
+                progress_tts = int(50 + (chunk_counter / 500) * 50)
+                progress_tts = min(progress_tts, 99)
+                conversion_tasks[task_id].update({"progress": progress_tts, "message": f"Gerando áudio ({progress_tts-50}% concluído)..."})
+                await asyncio.sleep(0.001)
+            elif chunk["type"] == "end":
+                print(f"Fim do stream TTS para tarefa {task_id}.")
+
+        with open(audio_filepath, "wb") as out:
+            out.write(audio_data_bytes)
+        print(f"Áudio para tarefa {task_id} gerado e salvo em {audio_filepath}.")
+
+        conversion_tasks[task_id].update({"status": "completed", "message": "Audiobook pronto para download!", "progress": 100})
+    except Exception as e:
+        print(f"Erro na conversão da tarefa {task_id}: {e}")
+        print(traceback.format_exc())
+        conversion_tasks[task_id].update({"status": "failed", "message": f"Erro na conversão: {str(e)}"})
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"Arquivo de texto temporário {os.path.basename(file_path)} removido.")
+
+# Rota principal que serve o arquivo HTML do frontend
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    with open("static/index.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+# NOVA ROTA: Para receber e configurar o token do ngrok
+@app.post("/set_ngrok_token")
+async def set_ngrok_token(token: str = Form(...)): # Usa Form para receber dados de formulário
+    global NGROK_AUTH_TOKEN, PUBLIC_NGROK_URL
+    if not token:
+        raise HTTPException(status_code=400, detail="Token do ngrok não pode ser vazio.")
+
+    NGROK_AUTH_TOKEN = token
+    ngrok.kill() # Mata qualquer processo ngrok anterior
+
+    try:
+        # Tenta conectar com o novo token
+        # Assumindo que o uvicorn rodará na porta 8000
+        PUBLIC_NGROK_URL = ngrok.connect(8000).public_url
+        print(f"Ngrok configurado com sucesso! Túnel em: {PUBLIC_NGROK_URL}")
+        return JSONResponse({"message": "Token ngrok configurado e túnel estabelecido!", "public_url": PUBLIC_NGROK_URL})
+    except Exception as e:
+        print(f"Erro ao configurar ngrok com o token fornecido: {e}")
+        NGROK_AUTH_TOKEN = None # Reseta o token se houver falha
+        raise HTTPException(status_code=500, detail=f"Erro ao configurar ngrok: {str(e)}. Verifique se o token é válido.")
+
+
+# Rota para obter as vozes disponíveis para o frontend
+@app.get("/voices", response_class=JSONResponse)
+async def list_voices_endpoint():
+    voices = await get_available_voices()
+    return voices
+
+# Novo endpoint para iniciar o processamento em background
+@app.post("/process_file")
+async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-BR-ThalitaMultilingualNeural", background_tasks: BackgroundTasks = BackgroundTasks()):
+    global NGROK_AUTH_TOKEN
+    if not NGROK_AUTH_TOKEN:
+        raise HTTPException(status_code=401, detail="Token do ngrok não configurado. Por favor, insira seu token primeiro.")
+
+    current_available_voices = await get_available_voices()
+    if voice not in current_available_voices:
+        raise HTTPException(status_code=400, detail=f"Voz '{voice}' não é válida. Escolha uma das opções disponíveis.")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Nenhum arquivo enviado.")
+
+    task_id = str(uuid.uuid4())
+    temp_input_filepath = os.path.join("uploads", f"{task_id}_{file.filename}")
+
+    try:
+        content = await file.read()
+        with open(temp_input_filepath, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro ao salvar arquivo temporário: {str(e)}")
+
+    conversion_tasks[task_id] = {
+        "status": "pending",
+        "progress": 0,
+        "message": "Tarefa iniciada, aguardando processamento...",
+        "file_path": None,
+        "total_characters": 0
+    }
+
+    background_tasks.add_task(perform_conversion_task, task_id, temp_input_filepath, voice)
+
+    return JSONResponse({"task_id": task_id, "message": "Processamento iniciado. Use o endpoint /status para verificar o progresso."})
+
+# Novo endpoint para verificar o status da conversão
+@app.get("/status/{task_id}")
+async def get_conversion_status(task_id: str):
+    status = conversion_tasks.get(task_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="ID da tarefa não encontrado ou tarefa já concluída e limpa.")
+    return JSONResponse(status)
+
+# Novo endpoint para download do arquivo final
+@app.get("/download/{task_id}")
+async def download_audiobook(task_id: str, background_tasks: BackgroundTasks):
+    status = conversion_tasks.get(task_id)
+    if not status or status["status"] != "completed" or not status["file_path"] or not os.path.exists(status["file_path"]):
+        print(f"Tentativa de download para tarefa {task_id} falhou. Status: {status}")
+        raise HTTPException(status_code=404, detail="Audiobook não encontrado ou ainda não pronto para download.")
+
+    audio_filepath = status["file_path"]
+    filename = os.path.basename(audio_filepath)
+
+    response = FileResponse(audio_filepath, media_type="audio/mpeg", filename=filename, background=background_tasks)
+
+    background_tasks.add_task(cleanup_file_after_download, audio_filepath, task_id)
+
+    return response
+
+# Função de limpeza para ser usada como background_task
+async def cleanup_file_after_download(file_path: str, task_id: str):
+    print(f"Iniciando limpeza do arquivo temporário: {file_path}")
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        print(f"Arquivo temporário {file_path} removido com sucesso.")
+    else:
+        print(f"Arquivo temporário {file_path} não encontrado para remoção (já removido?).")
+
+    if task_id in conversion_tasks:
+        del conversion_tasks[task_id]
+        print(f"Status da tarefa {task_id} removido.")
 
 # Commented out IPython magic to ensure Python compatibility.
 # # Célula 4: Criar o arquivo frontend (index.html) APRIMORADO
-# %%writefile static/index.html
-# <!DOCTYPE html>
-# <html lang="pt-BR">
-# <head>
-#     <meta charset="UTF-8">
-#     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-#     <title>Gerador de Audiobook Gratuito</title>
-#     <style>
-#         body {
-#             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-#             margin: 0;
-#             padding: 20px;
-#             background-color: #f4f7f6;
-#             color: #333;
-#             display: flex;
-#             justify-content: center;
-#             align-items: center;
-#             min-height: 100vh;
-#             box-sizing: border-box;
-#         }
-#         .container {
-#             background-color: #ffffff;
-#             max-width: 600px;
-#             margin: auto;
-#             padding: 30px;
-#             border-radius: 12px;
-#             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
-#             text-align: center;
-#             border: 1px solid #e0e0e0;
-#         }
-#         h1 {
-#             color: #2c3e50;
-#             font-size: 1.8em;
-#             margin-bottom: 15px;
-#         }
-#         p {
-#             font-size: 1.1em;
-#             color: #555;
-#             margin-bottom: 25px;
-#             line-height: 1.6;
-#         }
-#         label {
-#             display: block;
-#             margin-bottom: 8px;
-#             font-weight: bold;
-#             color: #444;
-#         }
-#         select, input[type="file"] {
-#             width: calc(100% - 20px);
-#             padding: 10px;
-#             margin: 0 auto 20px auto;
-#             border: 1px solid #ced4da;
-#             border-radius: 6px;
-#             font-size: 1em;
-#             background-color: #e9ecef;
-#             cursor: pointer;
-#             box-sizing: border-box; /* Para incluir padding na largura */
-#         }
-#         button {
-#             padding: 12px 25px;
-#             background-color: #007bff;
-#             color: white;
-#             border: none;
-#             border-radius: 6px;
-#             cursor: pointer;
-#             font-size: 1.1em;
-#             transition: background-color 0.3s ease, transform 0.2s ease;
-#             box-shadow: 0 2px 5px rgba(0, 123, 255, 0.2);
-#             margin-top: 10px;
-#         }
-#         button:hover {
-#             background-color: #0056b3;
-#             transform: translateY(-2px);
-#         }
-#         button:active {
-#             transform: translateY(0);
-#             box-shadow: none;
-#         }
-#         button:disabled {
-#             background-color: #cccccc;
-#             cursor: not-allowed;
-#             transform: none;
-#             box-shadow: none;
-#         }
-#         .message, .error {
-#             margin-top: 25px;
-#             padding: 12px;
-#             border-radius: 8px;
-#             font-weight: bold;
-#             display: none; /* Escondido por padrão */
-#             word-wrap: break-word;
-#         }
-#         .message {
-#             background-color: #d4edda;
-#             color: #155724;
-#             border: 1px solid #c3e6cb;
-#         }
-#         .error {
-#             background-color: #f8d7da;
-#             color: #721c24;
-#             border: 1px solid #f5c6cb;
-#         }
-#         /* Estilos para a barra de progresso */
-#         .progress-container {
-#             width: 100%;
-#             background-color: #e0e0e0;
-#             border-radius: 5px;
-#             overflow: hidden;
-#             margin-top: 20px;
-#             height: 25px; /* Aumenta a altura para caber o texto */
-#             display: none; /* Escondido por padrão */
-#             position: relative;
-#         }
-#         .progress-bar {
-#             height: 100%;
-#             background-color: #007bff;
-#             width: 0; /* Inicia com 0% */
-#             border-radius: 5px;
-#             transition: width 0.5s ease-in-out; /* Suaviza a transição da largura */
-#             position: absolute;
-#             left: 0;
-#             top: 0;
-#         }
-#         .progress-text {
-#             position: absolute;
-#             width: 100%;
-#             text-align: center;
-#             line-height: 25px; /* Centraliza o texto verticalmente */
-#             color: white; /* Texto branco sobre a barra */
-#             font-weight: bold;
-#             text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
-#             z-index: 1; /* Garante que o texto esteja acima da barra */
-#         }
-# 
-#         @media (max-width: 768px) {
-#             .container {
-#                 margin: 10px;
-#                 padding: 20px;
-#             }
-#             h1 {
-#                 font-size: 1.5em;
-#             }
-#             p {
-#                 font-size: 0.95em;
-#             }
-#             button {
-#                 padding: 10px 20px;
-#                 font-size: 1em;
-#             }
-#         }
-#     </style>
-# </head>
-# <body>
-#     <div class="container">
-#         <h1>Crie seu Audiobook Gratuitamente</h1>
-#         <p>Faça o upload de um arquivo PDF, TXT, EPUB, DOC/DOCX e converta-o em audiobook em segundos.</p>
-# 
-#         <form id="uploadForm" enctype="multipart/form-data">
-#             <label for="voiceSelect">Escolha a Voz:</label>
-#             <select id="voiceSelect" name="voice">
-#                 </select>
-#             <br><br>
-#             <input type="file" name="file" id="fileInput" accept=".pdf,.txt,.epub,.doc,.docx">
-#             <button type="submit" id="submitButton">Gerar Audiobook</button>
-#         </form>
-# 
-#         <div class="progress-container" id="progressContainer">
-#             <div class="progress-bar" id="progressBar"></div>
-#             <div class="progress-text" id="progressText">Aguardando...</div>
-#         </div>
-#         <div id="message" class="message"></div>
-#         <div id="error" class="error"></div>
-#     </div>
-# 
-#     <script>
-#         const uploadForm = document.getElementById('uploadForm');
-#         const fileInput = document.getElementById('fileInput');
-#         const voiceSelect = document.getElementById('voiceSelect');
-#         const messageDiv = document.getElementById('message');
-#         const errorDiv = document.getElementById('error');
-#         const submitButton = document.getElementById('submitButton');
-#         const progressContainer = document.getElementById('progressContainer');
-#         const progressBar = document.getElementById('progressBar');
-#         const progressText = document.getElementById('progressText');
-# 
-#         let pollingInterval;
-#         let startTime;
-# 
-#         // Função para exibir mensagem de status e controlar a barra de progresso
-#         function showStatus(text, isError = false, progress = null, messageDetail = '') {
-#             messageDiv.style.display = 'none';
-#             errorDiv.style.display = 'none';
-#             progressContainer.style.display = 'none';
-#             progressText.textContent = ''; // Limpa texto de progresso
-# 
-#             if (isError) {
-#                 errorDiv.textContent = text;
-#                 errorDiv.style.display = 'block';
-#             } else {
-#                 messageDiv.textContent = text;
-#                 messageDiv.style.display = 'block';
-# 
-#                 if (progress !== null && progress >= 0 && progress <= 100) {
-#                     progressContainer.style.display = 'block';
-#                     progressBar.style.width = `${progress}%`;
-#                     let timeElapsed = 0;
-#                     if (startTime) {
-#                         timeElapsed = (Date.now() - startTime) / 1000; // Tempo em segundos
-#                     }
-#                     progressText.textContent = `${messageDetail} (${progress}%) - Tempo: ${timeElapsed.toFixed(1)}s`;
-#                 }
-#             }
-#         }
-# 
-#         // Função para carregar as vozes disponíveis
-#         async function loadVoices() {
-#             try {
-#                 const response = await fetch('/voices');
-#                 if (response.ok) {
-#                     const voices = await response.json();
-#                     voiceSelect.innerHTML = ''; // Limpa opções existentes
-#                     for (const code in voices) {
-#                         const option = document.createElement('option');
-#                         option.value = code;
-#                         option.textContent = voices[code];
-#                         voiceSelect.appendChild(option);
-#                     }
-#                     // Seleciona a Thalita Multilingual Neural por padrão se estiver disponível
-#                     if (voices["pt-BR-ThalitaMultilingualNeural"]) {
-#                         voiceSelect.value = "pt-BR-ThalitaMultilingualNeural";
-#                     }
-#                 } else {
-#                     showStatus('Erro ao carregar vozes. Tente recarregar a página.', true);
-#                 }
-#             } catch (error) {
-#                 console.error('Erro ao carregar vozes:', error);
-#                 showStatus('Erro de conexão ao carregar vozes. Verifique o servidor.', true);
-#             }
-#         }
-# 
-#         // Carrega as vozes ao carregar a página
-#         document.addEventListener('DOMContentLoaded', loadVoices);
-# 
-#         uploadForm.addEventListener('submit', async function(event) {
-#             event.preventDefault(); // Impede o envio padrão do formulário
-# 
-#             showStatus(''); // Limpa mensagens e esconde barra
-#             clearInterval(pollingInterval); // Limpa qualquer polling anterior
-# 
-#             if (fileInput.files.length === 0) {
-#                 showStatus('Por favor, selecione um arquivo.', true);
-#                 return;
-#             }
-# 
-#             const selectedVoice = voiceSelect.value;
-#             if (!selectedVoice) {
-#                 showStatus('Por favor, selecione uma voz.', true);
-#                 return;
-#             }
-# 
-#             const formData = new FormData();
-#             formData.append('file', fileInput.files[0]);
-#             formData.append('voice', selectedVoice);
-# 
-#             showStatus('Enviando arquivo e iniciando processamento...', false, 0, 'Iniciando...');
-#             submitButton.disabled = true;
-# 
-#             try {
-#                 // Inicia o processo no backend
-#                 const processResponse = await fetch('/process_file', {
-#                     method: 'POST',
-#                     body: formData
-#                 });
-# 
-#                 if (!processResponse.ok) {
-#                     const errorText = await processResponse.text();
-#                     showStatus(`Erro ao iniciar processamento: ${errorText}`, true);
-#                     return;
-#                 }
-# 
-#                 const processResult = await processResponse.json();
-#                 const taskId = processResult.task_id;
-#                 startTime = Date.now(); // Inicia o contador de tempo
-# 
-#                 showStatus('Processamento iniciado. Verificando progresso...', false, 0, 'Iniciando...');
-# 
-#                 // Inicia o polling para verificar o status
-#                 pollingInterval = setInterval(async () => {
-#                     try {
-#                         const statusResponse = await fetch(`/status/${taskId}`);
-#                         if (!statusResponse.ok) {
-#                             clearInterval(pollingInterval);
-#                             showStatus('Erro ao verificar status da conversão. Tente novamente.', true);
-#                             return;
-#                         }
-# 
-#                         const statusResult = await statusResponse.json();
-#                         const { status, progress, message } = statusResult;
-# 
-#                         showStatus(message, false, progress, message); // Atualiza mensagem e barra
-# 
-#                         if (status === 'completed') {
-#                             clearInterval(pollingInterval);
-#                             showStatus('Audiobook pronto! Iniciando download...', false, 100, 'Download pronto!');
-# 
-#                             // Aciona o download
-#                             const downloadUrl = `/download/${taskId}`;
-#                             const a = document.createElement('a');
-#                             a.style.display = 'none';
-#                             a.href = downloadUrl;
-#                             a.download = fileInput.files[0].name.split('.').slice(0, -1).join('.') + '.mp3';
-#                             document.body.appendChild(a);
-#                             a.click();
-#                             document.body.removeChild(a); // Remove o elemento 'a' após o clique
-# 
-#                             showStatus('Download concluído!', false, 100, 'Concluído!');
-#                         } else if (status === 'failed') {
-#                             clearInterval(pollingInterval);
-#                             showStatus(`Conversão falhou: ${message}`, true);
-#                         }
-#                     } catch (error) {
-#                         clearInterval(pollingInterval);
-#                         console.error('Erro no polling de status:', error);
-#                         showStatus('Ocorreu um erro na comunicação com o servidor durante o progresso. Tente novamente.', true);
-#                     }
-#                 }, 2000); // Poll a cada 2 segundos
-# 
-#             } catch (error) {
-#                 console.error('Erro na requisição inicial:', error);
-#                 showStatus('Ocorreu um erro na comunicação com o servidor. Verifique sua conexão ou tente novamente.', true);
-#             } finally {
-#                 // O botão só será reabilitado quando o download iniciar/erro acontecer
-#                 // ou se o polling for cancelado por um erro.
-#                 // Não desabilitamos aqui para permitir o fluxo de polling.
-#             }
-#         });
-#     </script>
-# </body>
-# </html>
-#
+%%writefile static/index.html
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Audiobook Gratuito</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f7f6;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            max-width: 600px;
+            margin: auto;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            border: 1px solid #e0e0e0;
+        }
+        h1 {
+            color: #2c3e50;
+            font-size: 1.8em;
+            margin-bottom: 15px;
+        }
+        p {
+            font-size: 1.1em;
+            color: #555;
+            margin-bottom: 25px;
+            line-height: 1.6;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #444;
+        }
+        select, input[type="file"], input[type="text"] { /* Adicionado input[type="text"] */
+            width: calc(100% - 20px);
+            padding: 10px;
+            margin: 0 auto 20px auto;
+            border: 1px solid #ced4da;
+            border-radius: 6px;
+            font-size: 1em;
+            background-color: #e9ecef;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+        button {
+            padding: 12px 25px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1.1em;
+            transition: background-color 0.3s ease, transform 0.2s ease;
+            box-shadow: 0 2px 5px rgba(0, 123, 255, 0.2);
+            margin-top: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+            transform: translateY(-2px);
+        }
+        button:active {
+            transform: translateY(0);
+            box-shadow: none;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        .message, .error {
+            margin-top: 25px;
+            padding: 12px;
+            border-radius: 8px;
+            font-weight: bold;
+            display: none;
+            word-wrap: break-word;
+        }
+        .message {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .progress-container {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 20px;
+            height: 25px;
+            display: none;
+            position: relative;
+        }
+        .progress-bar {
+            height: 100%;
+            background-color: #007bff;
+            width: 0;
+            border-radius: 5px;
+            transition: width 0.5s ease-in-out;
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
+        .progress-text {
+            position: absolute;
+            width: 100%;
+            text-align: center;
+            line-height: 25px;
+            color: white;
+            font-weight: bold;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+            z-index: 1;
+        }
+        .ngrok-setup { /* Estilo para a seção de configuração do ngrok */
+            background-color: #e6f7ff;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border: 1px solid #91d5ff;
+        }
+        .ngrok-setup h2 {
+            color: #0056b3;
+            margin-top: 0;
+            font-size: 1.5em;
+        }
+        .ngrok-setup ol {
+            text-align: left;
+            margin-bottom: 20px;
+            line-height: 1.8;
+            font-size: 0.95em;
+            color: #444;
+        }
+        .ngrok-setup ol li strong {
+            color: #003a7a;
+        }
+        .form-section {
+            display: none; /* Esconde a seção principal inicialmente */
+        }
+        .ngrok-url-display {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+            border-radius: 6px;
+            font-weight: bold;
+            display: none;
+            word-wrap: break-word;
+            text-align: left;
+        }
+        @media (max-width: 768px) {
+            .container {
+                margin: 10px;
+                padding: 20px;
+            }
+            h1 {
+                font-size: 1.5em;
+            }
+            p {
+                font-size: 0.95em;
+            }
+            button {
+                padding: 10px 20px;
+                font-size: 1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Crie seu Audiobook Gratuitamente</h1>
+        <p>Faça o upload de um arquivo PDF, TXT, EPUB, DOC/DOCX e converta-o em audiobook em segundos.</p>
+
+        <div class="ngrok-setup" id="ngrokSetupSection">
+            <h2>Passo 1: Configurar ngrok</h2>
+            <p>Para que este aplicativo funcione, ele precisa criar um túnel seguro para a internet usando o ngrok. Você precisa de um token de autenticação do ngrok.</p>
+            <ol>
+                <li>Vá para o site oficial do ngrok: <strong><a href="https://ngrok.com/signup" target="_blank">ngrok.com/signup</a></strong></li>
+                <li>Crie uma conta gratuita (ou faça login se já tiver uma).</li>
+                <li>Após fazer login, acesse seu painel e encontre seu `Auth Token` em <strong><a href="https://dashboard.ngrok.com/get-started/your-authtoken" target="_blank">dashboard.ngrok.com/get-started/your-authtoken</a></strong></li>
+                <li>Copie o token. Ele se parecerá com algo como `2xbaQNvi6miSZUVf8MzgZAQfTh6_t2wYSecnyeuys1qhr5vc`.</li>
+                <li>Cole o token no campo abaixo e clique em "Configurar ngrok".</li>
+            </ol>
+            <label for="ngrokTokenInput">Seu Token de Autenticação ngrok:</label>
+            <input type="text" id="ngrokTokenInput" placeholder="Cole seu token ngrok aqui">
+            <button id="setNgrokTokenButton">Configurar ngrok</button>
+            <div id="ngrokUrlDisplay" class="ngrok-url-display"></div>
+            <div id="ngrokMessage" class="message"></div>
+            <div id="ngrokError" class="error"></div>
+        </div>
+
+        <form id="uploadForm" enctype="multipart/form-data" class="form-section">
+            <h2>Passo 2: Gerar seu Audiobook</h2>
+            <label for="voiceSelect">Escolha a Voz:</label>
+            <select id="voiceSelect" name="voice">
+                </select>
+            <br><br>
+            <input type="file" name="file" id="fileInput" accept=".pdf,.txt,.epub,.doc,.docx">
+            <button type="submit" id="submitButton">Gerar Audiobook</button>
+        </form>
+
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar" id="progressBar"></div>
+            <div class="progress-text" id="progressText">Aguardando...</div>
+        </div>
+        <div id="message" class="message"></div>
+        <div id="error" class="error"></div>
+    </div>
+
+    <script>
+        const ngrokSetupSection = document.getElementById('ngrokSetupSection');
+        const ngrokTokenInput = document.getElementById('ngrokTokenInput');
+        const setNgrokTokenButton = document.getElementById('setNgrokTokenButton');
+        const ngrokMessageDiv = document.getElementById('ngrokMessage');
+        const ngrokErrorDiv = document.getElementById('ngrokError');
+        const ngrokUrlDisplay = document.getElementById('ngrokUrlDisplay');
+
+        const uploadForm = document.getElementById('uploadForm');
+        const fileInput = document.getElementById('fileInput');
+        const voiceSelect = document.getElementById('voiceSelect');
+        const messageDiv = document.getElementById('message');
+        const errorDiv = document.getElementById('error');
+        const submitButton = document.getElementById('submitButton');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+
+        let pollingInterval;
+        let startTime;
+
+        // Função para exibir mensagem de status e controlar a barra de progresso
+        function showStatus(targetDiv, text, isError = false, progress = null, messageDetail = '') {
+            targetDiv.style.display = 'block';
+            if (isError) {
+                targetDiv.classList.remove('message');
+                targetDiv.classList.add('error');
+            } else {
+                targetDiv.classList.remove('error');
+                targetDiv.classList.add('message');
+            }
+            targetDiv.textContent = text;
+
+            // Lógica de progresso é separada, pois afeta elementos específicos
+            if (targetDiv === messageDiv || targetDiv === errorDiv) { // Apenas para mensagens da conversão
+                if (progress !== null && progress >= 0 && progress <= 100) {
+                    progressContainer.style.display = 'block';
+                    progressBar.style.width = `${progress}%`;
+                    let timeElapsed = 0;
+                    if (startTime) {
+                        timeElapsed = (Date.now() - startTime) / 1000;
+                    }
+                    progressText.textContent = `${messageDetail} (${progress}%) - Tempo: ${timeElapsed.toFixed(1)}s`;
+                } else {
+                    progressContainer.style.display = 'none';
+                    progressBar.style.width = '0%';
+                    progressText.textContent = 'Aguardando...';
+                }
+            } else { // Para outras mensagens que não são de progresso
+                progressContainer.style.display = 'none';
+            }
+        }
+
+        // Função para limpar todas as mensagens e estados
+        function clearAllMessages() {
+            messageDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+            ngrokMessageDiv.style.display = 'none';
+            ngrokErrorDiv.style.display = 'none';
+            ngrokUrlDisplay.style.display = 'none';
+            clearInterval(pollingInterval);
+            progressContainer.style.display = 'none';
+            progressBar.style.width = '0%';
+            progressText.textContent = 'Aguardando...';
+        }
+
+        // Função para carregar as vozes disponíveis
+        async function loadVoices() {
+            try {
+                const response = await fetch('/voices');
+                if (response.ok) {
+                    const voices = await response.json();
+                    voiceSelect.innerHTML = '';
+                    for (const code in voices) {
+                        const option = document.createElement('option');
+                        option.value = code;
+                        option.textContent = voices[code];
+                        voiceSelect.appendChild(option);
+                    }
+                    if (voices["pt-BR-ThalitaMultilingualNeural"]) {
+                        voiceSelect.value = "pt-BR-ThalitaMultilingualNeural";
+                    }
+                } else {
+                    showStatus(errorDiv, 'Erro ao carregar vozes. Tente recarregar a página.', true);
+                }
+            } catch (error) {
+                console.error('Erro ao carregar vozes:', error);
+                showStatus(errorDiv, 'Erro de conexão ao carregar vozes. Verifique o servidor.', true);
+            }
+        }
+
+        // ---- Lógica para o Token do ngrok ----
+        setNgrokTokenButton.addEventListener('click', async function() {
+            clearAllMessages(); // Limpa mensagens anteriores
+            const ngrokToken = ngrokTokenInput.value.trim();
+
+            if (!ngrokToken) {
+                showStatus(ngrokErrorDiv, 'Por favor, insira seu token do ngrok.', true);
+                return;
+            }
+
+            setNgrokTokenButton.disabled = true;
+            ngrokTokenInput.disabled = true;
+            showStatus(ngrokMessageDiv, 'Configurando ngrok...', false);
+
+            try {
+                const response = await fetch('/set_ngrok_token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `token=${encodeURIComponent(ngrokToken)}`
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    showStatus(ngrokMessageDiv, `ngrok configurado! URL pública: ${result.public_url}`, false);
+                    ngrokUrlDisplay.innerHTML = `<strong>URL Pública:</strong> <a href="${result.public_url}" target="_blank">${result.public_url}</a> (Copie e use esta URL para acessar o app)`;
+                    ngrokUrlDisplay.style.display = 'block';
+
+                    // Mostra a seção de upload agora que o ngrok está configurado
+                    uploadForm.style.display = 'block';
+                    loadVoices(); // Carrega as vozes após o ngrok estar ativo
+                } else {
+                    const errorData = await response.json();
+                    showStatus(ngrokErrorDiv, `Erro ao configurar ngrok: ${errorData.detail || 'Erro desconhecido'}`, true);
+                    setNgrokTokenButton.disabled = false;
+                    ngrokTokenInput.disabled = false;
+                }
+            } catch (error) {
+                console.error('Erro ao enviar token ngrok:', error);
+                showStatus(ngrokErrorDiv, 'Erro de conexão ao configurar ngrok. Verifique se o servidor está rodando.', true);
+                setNgrokTokenButton.disabled = false;
+                ngrokTokenInput.disabled = false;
+            }
+        });
+
+        // ---- Lógica para o Upload do Arquivo ----
+        uploadForm.addEventListener('submit', async function(event) {
+            event.preventDefault();
+
+            clearAllMessages(); // Limpa todas as mensagens
+
+            if (fileInput.files.length === 0) {
+                showStatus(errorDiv, 'Por favor, selecione um arquivo.', true);
+                return;
+            }
+
+            const selectedVoice = voiceSelect.value;
+            if (!selectedVoice) {
+                showStatus(errorDiv, 'Por favor, selecione uma voz.', true);
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('voice', selectedVoice);
+
+            showStatus(messageDiv, 'Enviando arquivo e iniciando processamento...', false, 0, 'Iniciando...');
+            submitButton.disabled = true;
+            fileInput.disabled = true;
+            voiceSelect.disabled = true;
+
+            try {
+                const processResponse = await fetch('/process_file', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!processResponse.ok) {
+                    const errorData = await processResponse.json();
+                    showStatus(errorDiv, `Erro ao iniciar processamento: ${errorData.detail || 'Erro desconhecido'}`, true);
+                    submitButton.disabled = false;
+                    fileInput.disabled = false;
+                    voiceSelect.disabled = false;
+                    return;
+                }
+
+                const processResult = await processResponse.json();
+                const taskId = processResult.task_id;
+                startTime = Date.now();
+
+                showStatus(messageDiv, 'Processamento iniciado. Verificando progresso...', false, 0, 'Iniciando...');
+
+                pollingInterval = setInterval(async () => {
+                    try {
+                        const statusResponse = await fetch(`/status/${taskId}`);
+                        if (!statusResponse.ok) {
+                            clearInterval(pollingInterval);
+                            showStatus(errorDiv, 'Erro ao verificar status da conversão. Tente novamente.', true);
+                            submitButton.disabled = false;
+                            fileInput.disabled = false;
+                            voiceSelect.disabled = false;
+                            return;
+                        }
+
+                        const statusResult = await statusResponse.json();
+                        const { status, progress, message } = statusResult;
+
+                        showStatus(messageDiv, message, false, progress, message);
+
+                        if (status === 'completed') {
+                            clearInterval(pollingInterval);
+                            showStatus(messageDiv, 'Audiobook pronto! Iniciando download...', false, 100, 'Download pronto!');
+
+                            const downloadUrl = `/download/${taskId}`;
+                            const a = document.createElement('a');
+                            a.style.display = 'none';
+                            a.href = downloadUrl;
+                            a.download = fileInput.files[0].name.split('.').slice(0, -1).join('.') + '.mp3';
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+
+                            showStatus(messageDiv, 'Download concluído!', false, 100, 'Concluído!');
+                            submitButton.disabled = false;
+                            fileInput.disabled = false;
+                            voiceSelect.disabled = false;
+
+                        } else if (status === 'failed') {
+                            clearInterval(pollingInterval);
+                            showStatus(errorDiv, `Conversão falhou: ${message}`, true);
+                            submitButton.disabled = false;
+                            fileInput.disabled = false;
+                            voiceSelect.disabled = false;
+                        }
+                    } catch (error) {
+                        clearInterval(pollingInterval);
+                        console.error('Erro no polling de status:', error);
+                        showStatus(errorDiv, 'Ocorreu um erro na comunicação com o servidor durante o progresso. Tente novamente.', true);
+                        submitButton.disabled = false;
+                        fileInput.disabled = false;
+                        voiceSelect.disabled = false;
+                    }
+                }, 2000);
+
+            } catch (error) {
+                console.error('Erro na requisição inicial:', error);
+                showStatus(errorDiv, 'Ocorreu um erro na comunicação com o servidor. Verifique sua conexão ou tente novamente.', true);
+                submitButton.disabled = false;
+                fileInput.disabled = false;
+                voiceSelect.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
 
 # Célula 5: Iniciar Uvicorn e ngrok (Versão de teste mais robusta)
 
-from pyngrok import ngrok
+from pyngrok import ngrok # Já importado em main.py, mas bom garantir
 import uvicorn
-import nest_asyncio
+import nest_asyncio # Já importado em main.py, mas bom garantir
 import time
 
 # Permite rodar loop de eventos aninhado (necessário para uvicorn no Colab)
-nest_asyncio.apply()
-
-# Adicione seu authtoken do ngrok aqui
-# SUBSTITUA "2xbaQNvi6miSZUVf8MzgZAQfTh6_t2wYSecnyeuys1qhr5vc" PELO SEU TOKEN REAL
-ngrok.set_auth_token("2xbaQNvi6miSZUVf8MzgZAQfTh6_t2wYSecnyeuys1qhr5vc")
+# nest_asyncio.apply() # Já chamado dentro do main.py agora
 
 # Mata qualquer processo ngrok anterior para evitar erros de porta
 ngrok.kill()
@@ -646,13 +805,15 @@ ngrok.kill()
 # Defina a porta que o Uvicorn irá usar
 port = 8000
 
-# --- INICIA O NGROK E IMPRIME A URL ---
-public_url = ngrok.connect(port)
+# --- INICIA O NGROK INICIALMENTE PARA ACESSO AO FRONTEND ---
+# O token será configurado DEPOIS via interface web
+public_url = ngrok.connect(port) # Conecta sem um token setado, o que funcionará para testes limitados
 print(f"Ngrok túnel iniciado em: {public_url}") # Imprime o túnel logo
 
 print(f"")
 print(f"----------------------------------------------------")
-print(f"Tentando iniciar o servidor FastAPI na porta {port}...")
+print(f"Servidor FastAPI iniciado na porta {port}...")
+print(f"Acesse a URL acima para iniciar a configuração do ngrok.")
 print(f"----------------------------------------------------")
 print(f"")
 
