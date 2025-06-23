@@ -507,8 +507,8 @@ async def enhance_text_with_gemini(text: str) -> str:
 
     **Instruções Essenciais:**
     1.  **Prioridade Total: Focar APENAS na história/conteúdo narrativo principal.**
-        * **Remova COMPLETAMENTE:** prefácios, agradecimentos, índices, bibliografias, notas de rodapé extensas, cabeçalhos e rodapés de página, números de página isolados, metadados de PDF, tabelas que não sejam parte da narrativa direta, e quaisquer outras seções que não sejam a história contada ou o conteúdo central do livro.
-        * **Mantenha APENAS:** O título do livro (se presente no início do texto narrativo) e o corpo da história/conteúdo principal.
+        * **Remova COMPLETAMENTE:** prefácios, agradecimentos, índices, bibliografias, notas de rodapé extensas, cabeçalhos e rodapés de página, números de página isolados (ex: '1', '2', '3' sem contexto), metadados de PDF, tabelas que não sejam parte da narrativa direta, e quaisquer outras seções que não sejam a história contada ou o conteúdo central do livro.
+        * **Mantenha APENAS:** O título do livro (se presente no início do texto narrativo e identificável como tal) e o corpo da história/conteúdo principal. Se o título não for claro ou for parte de uma capa, ignore-o e comece pela narrativa.
     2.  **Correção de Gramática e Ortografia:** Corrija quaisquer erros gramaticais, de concordância e de ortografia.
     3.  **Pontuação Otimizada para Leitura:** Ajuste a pontuação (vírgulas, pontos, etc.) para que o ritmo da leitura TTS seja o mais natural possível, adicionando pausas onde necessário e removendo onde for excessivo.
     4.  **Expansão de Abreviaturas Ambíguas:** Expanda abreviaturas que podem causar confusão na leitura, como "Dr." para "Doutor", "Sra." para "Senhora", "etc." para "etcétera".
@@ -566,7 +566,20 @@ async def enhance_text_with_gemini(text: str) -> str:
         print(traceback.format_exc())
         return text
 
-async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_gemini_enhancement: bool = False):
+# NOVO: Função para sanitizar o nome do arquivo, removendo caracteres inválidos
+def _limpar_nome_arquivo(filename: str) -> str:
+    """Remove caracteres inválidos para nomes de arquivo e substitui espaços por underscore."""
+    # Remove caracteres inválidos para nomes de arquivo (Windows/Linux/macOS)
+    cleaned_name = re.sub(r'[<>:"/\\|?*]', '', filename)
+    # Substitui múltiplos espaços e hífens por um único underscore
+    cleaned_name = re.sub(r'[\s-]+', '_', cleaned_name)
+    # Remove underscores do início ou fim
+    cleaned_name = cleaned_name.strip('_')
+    # Limita o tamanho do nome do arquivo para evitar problemas de caminho muito longo
+    return cleaned_name[:100]
+
+
+async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_gemini_enhancement: bool = False, book_title: str = None): # Adicionado book_title
     try:
         conversion_tasks[task_id].update({"status": "extracting", "message": "Iniciando extração de texto...", "progress": 0})
         text = await get_text_from_file(file_path, task_id)
@@ -597,7 +610,20 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
             conversion_tasks[task_id].update({"status": "failed", "message": "Texto vazio após formatação (ou IA). Nenhuma leitura TTS possível."})
             return
 
-        audio_filename = os.path.splitext(os.path.basename(file_path))[0] + ".mp3"
+        # === Lógica para nomear o arquivo MP3 com o título do livro ===
+        if book_title:
+            # Usa o título fornecido pelo usuário e o sanitiza
+            base_filename = _limpar_nome_arquivo(book_title)
+            # Adiciona um sufixo para garantir unicidade, ou apenas "audiobook"
+            if not base_filename: # Se o título fornecido for inválido após a limpeza
+                base_filename = f"{_limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])}_audiobook"
+            else: # Adiciona o nome do arquivo original para evitar colisões
+                base_filename = f"{base_filename}_{_limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])[:15]}"
+        else:
+            # Fallback para o nome do arquivo original, como antes
+            base_filename = _limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])
+        
+        audio_filename = f"{base_filename}.mp3"
         audio_filepath = os.path.join("audiobooks", audio_filename)
         conversion_tasks[task_id]["file_path"] = audio_filepath
         conversion_tasks[task_id]["total_characters"] = len(text_formatted)
@@ -710,7 +736,13 @@ async def list_voices_endpoint():
     return voices
 
 @app.post("/process_file")
-async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-BR-ThalitaMultilingualNeural", use_gemini: bool = Form(False), background_tasks: BackgroundTasks = BackgroundTasks()):
+async def process_file_endpoint(
+    file: UploadFile = File(...),
+    voice: str = "pt-BR-ThalitaMultilingualNeural",
+    use_gemini: bool = Form(False),
+    book_title: str = Form(None), # Novo parâmetro opcional para o título do livro
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
     
     current_available_voices = await get_available_voices()
     if voice not in current_available_voices:
@@ -736,7 +768,8 @@ async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-B
         "total_characters": 0
     }
 
-    background_tasks.add_task(perform_conversion_task, temp_input_filepath, voice, task_id, use_gemini_enhancement=use_gemini)
+    # Passa o novo parâmetro 'book_title' para a tarefa de conversão
+    background_tasks.add_task(perform_conversion_task, temp_input_filepath, voice, task_id, use_gemini_enhancement=use_gemini, book_title=book_title)
 
     return JSONResponse({"task_id": task_id, "message": "Processamento iniciado. Use o endpoint /status para verificar o progresso."})
 
@@ -755,7 +788,7 @@ async def download_audiobook(task_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=404, detail="Audiobook não encontrado ou ainda não pronto para download.")
 
     audio_filepath = status["file_path"]
-    filename = os.path.basename(audio_filepath)
+    filename = os.path.basename(audio_filepath) # O nome do arquivo já inclui o título do livro se fornecido
 
     response = FileResponse(audio_filepath, media_type="audio/mpeg", filename=filename, background=background_tasks)
 

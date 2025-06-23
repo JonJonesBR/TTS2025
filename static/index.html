@@ -134,7 +134,6 @@
             text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
             z-index: 1;
         }
-        /* Removido .form-section { } vazio */
         .gemini-setup {
             background-color: #fff3e0;
             padding: 20px;
@@ -207,6 +206,10 @@
                 </select>
             <br><br>
             
+            <label for="bookTitleInput">Título do Livro (Opcional):</label>
+            <input type="text" id="bookTitleInput" name="book_title" placeholder="Ex: A Fantástica Fábrica de Chocolate">
+            <br><br>
+
             <label for="useGeminiEnhancement" style="display: flex; align-items: center; justify-content: center; margin-bottom: 20px; cursor: pointer;">
                 <input type="checkbox" id="useGeminiEnhancement" name="use_gemini_enhancement">
                 Usar IA Gemini para aprimorar o texto (requer chave API configurada)
@@ -235,12 +238,16 @@
         const progressBar = document.getElementById('progressBar');
         const progressText = document.getElementById('progressText');
 
+        // Novas constantes para a UI do Gemini
         const geminiSetupSection = document.getElementById('geminiSetupSection');
         const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
         const setGeminiApiKeyButton = document.getElementById('setGeminiApiKeyButton');
         const geminiMessageDiv = document.getElementById('geminiMessage');
         const geminiErrorDiv = document.getElementById('geminiError');
         const useGeminiEnhancementCheckbox = document.getElementById('useGeminiEnhancement');
+        
+        // Nova constante para o campo de título do livro
+        const bookTitleInput = document.getElementById('bookTitleInput');
 
 
         let pollingInterval;
@@ -373,12 +380,19 @@
             formData.append('file', fileInput.files[0]);
             formData.append('voice', selectedVoice);
             formData.append('use_gemini', useGeminiEnhancementCheckbox.checked);
+            
+            // Adiciona o título do livro se preenchido
+            if (bookTitleInput.value.trim() !== '') {
+                formData.append('book_title', bookTitleInput.value.trim());
+            }
+
 
             showStatus(messageDiv, 'Enviando arquivo e iniciando processamento...', false, 0, 'Iniciando...');
             submitButton.disabled = true;
             fileInput.disabled = true;
             voiceSelect.disabled = true;
             useGeminiEnhancementCheckbox.disabled = true;
+            bookTitleInput.disabled = true; // Desabilitar o campo de título também
 
             try {
                 const processResponse = await fetch('/process_file', {
@@ -393,6 +407,7 @@
                     fileInput.disabled = false;
                     voiceSelect.disabled = false;
                     useGeminiEnhancementCheckbox.disabled = false;
+                    bookTitleInput.disabled = false;
                     return;
                 }
 
@@ -412,6 +427,7 @@
                             fileInput.disabled = false;
                             voiceSelect.disabled = false;
                             useGeminiEnhancementCheckbox.disabled = false;
+                            bookTitleInput.disabled = false;
                             return;
                         }
 
@@ -428,7 +444,7 @@
                             const a = document.createElement('a');
                             a.style.display = 'none';
                             a.href = downloadUrl;
-                            a.download = fileInput.files[0].name.split('.').slice(0, -1).join('.') + '.mp3';
+                            // Nome do arquivo de download será gerenciado pelo servidor agora
                             document.body.appendChild(a);
                             a.click();
                             document.body.removeChild(a);
@@ -438,6 +454,7 @@
                             fileInput.disabled = false;
                             voiceSelect.disabled = false;
                             useGeminiEnhancementCheckbox.disabled = false;
+                            bookTitleInput.disabled = false;
 
                         } else if (status === 'failed') {
                             clearInterval(pollingInterval);
@@ -446,6 +463,7 @@
                             fileInput.disabled = false;
                             voiceSelect.disabled = false;
                             useGeminiEnhancementCheckbox.disabled = false;
+                            bookTitleInput.disabled = false;
                         }
                     } catch (error) {
                         clearInterval(pollingInterval);
@@ -455,6 +473,7 @@
                         fileInput.disabled = false;
                         voiceSelect.disabled = false;
                         useGeminiEnhancementCheckbox.disabled = false;
+                        bookTitleInput.disabled = false;
                     }
                 }, 2000);
 
@@ -465,6 +484,7 @@
                 fileInput.disabled = false;
                 voiceSelect.disabled = false;
                 useGeminiEnhancementCheckbox.disabled = false;
+                bookTitleInput.disabled = false;
             }
         });
     </script>
