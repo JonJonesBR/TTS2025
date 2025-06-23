@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,27 +27,45 @@ import json
 nest_asyncio.apply()
 
 app = FastAPI()
-carregar_conversion_tasks()  # ✅ Carregamento das tarefas ao iniciar o app
-
-# Rota para verificação de saúde
-@app.get("/health", response_class=JSONResponse)
-async def health_check():
-    return {"status": "ok", "message": "Application is healthy."}
-
-# Montagem dos arquivos estáticos e HTML raiz
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-@app.get("/", response_class=HTMLResponse)
-async def read_root():
-    with open("static/index.html", "r", encoding="utf-8") as f:
-        return f.read()
 
 # === GLOBAIS E VARIÁVEIS DE CONTROLE ===
-cached_voices = {}
-conversion_tasks = {}
+
 TAREFAS_JSON = "conversion_tasks.json"
 GEMINI_API_KEY = None
 FFMPEG_BIN = "ffmpeg"
+
+# Dicionários em memória
+cached_voices = {}
+conversion_tasks = {}
+
+# Garante que os diretórios necessários existam ao iniciar
+os.makedirs("uploads", exist_ok=True)
+os.makedirs("audiobooks", exist_ok=True)
+
+def salvar_conversion_tasks():
+    """Salva o estado atual do dicionário de tarefas em um arquivo JSON."""
+    try:
+        with open(TAREFAS_JSON, "w", encoding="utf-8") as f:
+            json.dump(conversion_tasks, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ Erro ao salvar estado de tarefas: {e}")
+
+def carregar_conversion_tasks():
+    """Carrega o estado das tarefas a partir do arquivo JSON na inicialização."""
+    global conversion_tasks
+    if os.path.exists(TAREFAS_JSON):
+        try:
+            with open(TAREFAS_JSON, "r", encoding="utf-8") as f:
+                # Usa update para mesclar, preservando possíveis tarefas já em memória
+                conversion_tasks.update(json.load(f))
+            print(f"📁 Tarefas carregadas do arquivo {TAREFAS_JSON}")
+        except json.JSONDecodeError:
+            print(f"⚠️ Arquivo de tarefas {TAREFAS_JSON} está corrompido ou vazio. Iniciando com dicionário limpo.")
+        except Exception as e:
+            print(f"⚠️ Erro ao carregar arquivo de tarefas: {e}")
+
+# Carrega tarefas salvas assim que a aplicação inicia
+carregar_conversion_tasks()
 
 # === MAPAS E PADRÕES PARA LIMPEZA DE TEXTO ===
 
@@ -99,22 +118,17 @@ ABREVIACOES_QUE_NAO_TERMINAM_FRASE = set([
 
 SIGLA_COM_PONTOS_RE = re.compile(r'\b([A-Z]\.\s*)+$')
 
-def salvar_conversion_tasks():
-    try:
-        with open(TAREFAS_JSON, "w", encoding="utf-8") as f:
-            json.dump(conversion_tasks, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"⚠️ Erro ao salvar estado de tarefas: {e}")
+# === ROTAS ESTÁTICAS E PRINCIPAIS ===
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-def carregar_conversion_tasks():
-    global conversion_tasks
-    if os.path.exists(TAREFAS_JSON):
-        try:
-            with open(TAREFAS_JSON, "r", encoding="utf-8") as f:
-                conversion_tasks.update(json.load(f))
-            print(f"📁 Tarefas carregadas do arquivo {TAREFAS_JSON}")
-        except Exception as e:
-            print(f"⚠️ Erro ao carregar arquivo de tarefas: {e}")
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    with open("static/index.html", "r", encoding="utf-8") as f:
+        return f.read()
+
+@app.get("/health", response_class=JSONResponse)
+async def health_check():
+    return {"status": "ok", "message": "Application is healthy."}
 
 def _formatar_numeracao_capitulos(texto):
     def substituir_cap(match):
@@ -476,6 +490,7 @@ def _extrair_texto_de_epub_helper(caminho_epub: str) -> str:
 cached_voices = {}
 
 async def get_available_voices():
+    """Busca vozes disponíveis, com cache para evitar requisições repetidas."""
     global cached_voices
     if cached_voices:
         return cached_voices
@@ -504,10 +519,8 @@ async def get_available_voices():
         cached_voices = ordered_voices
         print(f"Vozes carregadas: {len(cached_voices)} opções.")
         return cached_voices
-
     except Exception as e:
-        print(f"Erro ao obter vozes Edge TTS: {e}")
-        print(traceback.format_exc())
+        print(f"❌ Erro ao obter vozes Edge TTS: {e}")
         return {
             "pt-BR-ThalitaMultilingualNeural": "Thalita (Feminina, Neural) - Fallback",
             "pt-BR-FranciscaNeural": "Francisca (Feminina, Neural) - Fallback",
@@ -517,13 +530,9 @@ async def get_available_voices():
 # Endpoint de listagem de vozes disponíveis
 @app.get("/voices", response_class=JSONResponse)
 async def get_voices_endpoint():
+    """Endpoint que lista as vozes disponíveis para o frontend."""
     voices = await get_available_voices()
     return voices
-
-# Endpoint para health check (monitoramento)
-@app.get("/health", response_class=JSONResponse)
-async def health_check():
-    return {"status": "ok", "message": "Application is healthy."}
 
 @app.post("/process_file")
 async def process_file_endpoint(
@@ -533,35 +542,69 @@ async def process_file_endpoint(
     use_gemini: bool = Form(False),
     book_title: str = Form(None)
 ):
+    """Recebe o arquivo e inicia o processo de conversão em segundo plano."""
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="Arquivo inválido ou não enviado.")
+    
+    # Salva arquivo temporário de forma segura
     try:
-        if not file:
-            raise HTTPException(status_code=400, detail="Arquivo não enviado.")
-
-        # Salvar arquivo temporário
-        temp_file = NamedTemporaryFile(delete=False, dir="uploads", suffix=os.path.splitext(file.filename)[-1])
-        with open(temp_file.name, "wb") as f:
-            content = await file.read()
-            f.write(content)
-
-        task_id = str(uuid.uuid4())
-        conversion_tasks[task_id] = {
-            "status": "in_queue",
-            "message": "Tarefa recebida.",
-            "progress": 0
-        }
-
-        background_tasks.add_task(
-            perform_conversion_task, temp_file.name, voice, task_id, use_gemini, book_title
-        )
-
-        return JSONResponse({"task_id": task_id})
-
+        suffix = Path(file.filename).suffix
+        with NamedTemporaryFile(delete=False, dir="uploads", suffix=suffix) as temp_file:
+            contents = await file.read()
+            temp_file.write(contents)
+            temp_file_path = temp_file.name
     except Exception as e:
-        print(f"Erro no endpoint /process_file: {e}")
-        raise HTTPException(status_code=500, detail="Erro ao iniciar o processamento.")
+        print(f"❌ Erro ao salvar arquivo temporário: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao salvar arquivo no servidor.")
+
+    task_id = str(uuid.uuid4())
+    conversion_tasks[task_id] = {
+        "status": "in_queue",
+        "message": "Tarefa recebida e na fila.",
+        "progress": 0,
+        "file_path": None
+    }
+    
+    background_tasks.add_task(
+        perform_conversion_task, temp_file_path, voice, task_id, use_gemini, book_title
+    )
+    
+    salvar_conversion_tasks() # Salva o estado inicial da tarefa
+    print(f"✅ Tarefa {task_id} iniciada para o arquivo {file.filename}.")
+    
+    return JSONResponse({"task_id": task_id})
+
+@app.get("/status/{task_id}", response_class=JSONResponse)
+async def get_task_status(task_id: str):
+    """[NOVO] Endpoint para verificar o status de uma tarefa de conversão."""
+    print(f"🔎 Verificando status da tarefa: {task_id}")
+    task = conversion_tasks.get(task_id)
+    if not task:
+        print(f"❌ Tarefa {task_id} não encontrada no dicionário.")
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada ou expirada.")
+    return task
+
+@app.get("/download/{task_id}")
+async def download_file(task_id: str):
+    """[NOVO] Endpoint para baixar o audiobook finalizado."""
+    task = conversion_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada.")
+
+    if task.get("status") != "completed":
+        raise HTTPException(status_code=409, detail=f"A tarefa ainda não foi concluída. Status: {task.get('message')}")
+
+    file_path = task.get("file_path")
+    if not file_path or not os.path.exists(file_path):
+        print(f"❌ Arquivo final não encontrado para a tarefa {task_id} em {file_path}")
+        raise HTTPException(status_code=404, detail="O arquivo final não foi encontrado no servidor.")
+    
+    filename = os.path.basename(file_path)
+    return FileResponse(path=file_path, filename=filename, media_type='audio/mpeg')
 
 @app.post("/set_gemini_api_key")
 async def set_gemini_api_key_endpoint(api_key: str = Form(...)):
+    """Configura a chave da API do Gemini."""
     global GEMINI_API_KEY
     if not api_key:
         raise HTTPException(status_code=400, detail="Chave API não pode ser vazia.")
@@ -904,9 +947,3 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
             except Exception as e_rmdir:
                 print(f"⚠️ Erro ao remover diretório de chunks temporários: {e_rmdir}")
 from fastapi import Path
-
-@app.get("/status/{task_id}", response_class=JSONResponse)
-async def get_task_status(task_id: str = Path(..., description="UUID da tarefa a ser consultada.")):
-    if task_id not in conversion_tasks:
-        raise HTTPException(status_code=404, detail="Tarefa não encontrada.")
-    return conversion_tasks[task_id]
