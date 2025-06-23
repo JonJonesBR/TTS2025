@@ -7,3 +7,6 @@ beautifulsoup4
 edge-tts
 python-multipart
 nest_asyncio
+num2words
+chardet
+html2text

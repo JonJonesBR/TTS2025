@@ -129,11 +129,9 @@
             text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
             z-index: 1;
         }
-        /* Remover ngrok-setup e form-section display:none; aqui */
         .form-section {
             /* display: none; -- REMOVIDO PARA SEMPRE MOSTRAR O FORM */
         }
-        /* As classes .ngrok-setup, .ngrok-url-display etc. foram removidas do HTML */
         @media (max-width: 768px) {
             .container {
                 margin: 10px;
@@ -156,7 +154,7 @@
     <div class="container">
         <h1>Crie seu Audiobook Gratuitamente</h1>
         <p>Faça o upload de um arquivo PDF, TXT, EPUB, DOC/DOCX e converta-o em audiobook em segundos.</p>
-        <!-- A DIV 'ngrok-setup' FOI REMOVIDA DAQUI -->
+        
 
         <form id="uploadForm" enctype="multipart/form-data" class="form-section">
             <h2>Gerar seu Audiobook</h2>
@@ -177,7 +175,6 @@
     </div>
 
     <script>
-        // Variáveis ngrok-related foram removidas
         const uploadForm = document.getElementById('uploadForm');
         const fileInput = document.getElementById('fileInput');
         const voiceSelect = document.getElementById('voiceSelect');
@@ -223,8 +220,7 @@
 
         function clearAllMessages() {
             messageDiv.style.display = 'none';
-            errorDiv.style.display = 'none';
-            // Variáveis ngrok-related de mensagem também foram removidas daqui
+            errorDiv.style.display = 'none';           
             clearInterval(pollingInterval);
             progressContainer.style.display = 'none';
             progressBar.style.width = '0%';
@@ -243,7 +239,6 @@
                         option.textContent = voices[code];
                         voiceSelect.appendChild(option);
                     }
-                    // Tenta selecionar Thalita como padrão, se disponível
                     if (voices["pt-BR-ThalitaMultilingualNeural"]) {
                         voiceSelect.value = "pt-BR-ThalitaMultilingualNeural";
                     }
@@ -256,12 +251,9 @@
             }
         }
 
-        // Chame loadVoices() ao carregar a página, já que não há mais configuração ngrok
         document.addEventListener('DOMContentLoaded', (event) => {
             loadVoices();
         });
-
-        // Lógica ngrok-related de setNgrokTokenButton.addEventListener foi removida
 
         uploadForm.addEventListener('submit', async function(event) {
             event.preventDefault();

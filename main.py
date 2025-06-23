@@ -12,8 +12,16 @@ from bs4 import BeautifulSoup
 import traceback
 import json
 import uuid
+import re # Importar para as funções de regex
+import unicodedata # Importar para normalização de texto
 
 import nest_asyncio
+
+# Importações para as novas funcionalidades de limpeza de texto
+# Módulos que precisam estar em requirements.txt
+from num2words import num2words # Para expandir números para extenso
+import chardet # Para detectar encoding de arquivos
+import html2text # Para extrair texto de HTML (usado em EPUB)
 
 nest_asyncio.apply()
 
@@ -23,8 +31,344 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 cached_voices = {}
 conversion_tasks = {}
-# NGROK_AUTH_TOKEN e PUBLIC_NGROK_URL removidos
-# import pyngrok removido
+
+# ================== CONFIGURAÇÕES E MAPAS PARA LIMPEZA DE TEXTO ==================
+# Estas constantes e mapas são do seu arquivo Conversor_TTS_com_MP4_09.04.2025.py
+
+ABREVIACOES_MAP = {
+    'dr': 'Doutor', 'd': 'Dona', 'dra': 'Doutora',
+    'sr': 'Senhor', 'sra': 'Senhora', 'srta': 'Senhorita',
+    'prof': 'Professor', 'profa': 'Professora',
+    'eng': 'Engenheiro', 'engª': 'Engenheira',
+    'adm': 'Administrador', 'adv': 'Advogado',
+    'exmo': 'Excelentíssimo', 'exma': 'Excelentíssima',
+    'v.exa': 'Vossa Excelência', 'v.sa': 'Vossa Senhoria',
+    'av': 'Avenida', 'r': 'Rua', 'km': 'Quilômetro',
+    'etc': 'etcétera', 'ref': 'Referência',
+    'pag': 'Página', 'pags': 'Páginas',
+    'fl': 'Folha', 'fls': 'Folhas',
+    'pe': 'Padre',
+    'dept': 'Departamento', 'depto': 'Departamento',
+    'univ': 'Universidade', 'inst': 'Instituição',
+    'est': 'Estado', 'tel': 'Telefone',
+    'eua': 'Estados Unidos da América',
+    'ed': 'Edição', 'ltda': 'Limitada'
+}
+
+# Pré-processar para busca case-insensitive mais rápida
+ABREVIACOES_MAP_LOWER = {k.lower(): v for k, v in ABREVIACOES_MAP.items()}
+
+CASOS_ESPECIAIS_RE = {
+     r'\bV\.Exa\.(?=\s)': 'Vossa Excelência',
+     r'\bV\.Sa\.(?=\s)': 'Vossa Senhoria',
+     r'\bEngª\.(?=\s)': 'Engenheira'
+}
+
+CONVERSAO_CAPITULOS_EXTENSO_PARA_NUM = {
+    'UM': '1', 'DOIS': '2', 'TRÊS': '3', 'QUATRO': '4', 'CINCO': '5',
+    'SEIS': '6', 'SETE': '7', 'OITO': '8', 'NOVE': '9', 'DEZ': '10',
+    'ONZE': '11', 'DOZE': '12', 'TREZE': '13', 'CATORZE': '14', 'QUINZE': '15',
+    'DEZESSEIS': '16', 'DEZESSETE': '17', 'DEZOITO': '18', 'DEZENOVE': '19', 'VINTE': '20'
+}
+
+ABREVIACOES_QUE_NAO_TERMINAM_FRASE = set([
+    'sr.', 'sra.', 'srta.', 'dr.', 'dra.', 'prof.', 'profa.', 'eng.', 'exmo.', 'exma.',
+    'pe.', 'rev.', 'ilmo.', 'ilma.', 'gen.', 'cel.', 'maj.', 'cap.', 'ten.', 'sgt.',
+    'cb.', 'sd.', 'me.', 'ms.', 'msc.', 'esp.', 'av.', 'r.', 'pç.', 'esq.', 'trav.',
+    'jd.', 'pq.', 'rod.', 'km.', 'apt.', 'ap.', 'bl.', 'cj.', 'cs.', 'ed.', 'nº',
+    'no.', 'uf.', 'cep.', 'est.', 'mun.', 'dist.', 'zon.', 'reg.', 'kg.', 'cm.',
+    'mm.', 'lt.', 'ml.', 'mg.', 'seg.', 'min.', 'hr.', 'ltda.', 's.a.', 's/a',
+    'cnpj.', 'cpf.', 'rg.', 'proc.', 'ref.', 'cod.', 'tel.', 'etc.', 'p.ex.', 'ex.',
+    'i.e.', 'e.g.', 'vs.', 'cf.', 'op.cit.', 'loc.cit.', 'fl.', 'fls.', 'pag.',
+    'p.', 'pp.', 'u.s.', 'e.u.a.', 'o.n.u.', 'i.b.m.', 'h.p.', 'obs.', 'att.',
+    'resp.', 'publ.', 'ed.', 'doutora', 'senhora', 'senhor', 'doutor', 'professor',
+    'professora', 'general'
+])
+SIGLA_COM_PONTOS_RE = re.compile(r'\b([A-Z]\.\s*)+$')
+
+# ================== FUNÇÕES AUXILIARES DE LIMPEZA DE TEXTO ==================
+# Copiadas do seu arquivo original
+
+def _formatar_numeracao_capitulos(texto):
+    """
+    Localiza títulos como 'Capítulo 1 Mesmo em pleno verão...' ou 'CAPÍTULO UM ...'
+    e converte para: '\n\nCAPÍTULO 1.\n\nMesmo em pleno verão...'
+    Também padroniza números por extenso para arábicos.
+    """
+    def substituir_cap(match):
+        tipo_cap = match.group(1).upper()
+        numero_rom_arab = match.group(2)
+        numero_extenso = match.group(3)
+        titulo_opcional = match.group(4).strip() if match.group(4) else ""
+
+        numero_final = ""
+        if numero_rom_arab:
+            numero_final = numero_rom_arab.upper()
+        elif numero_extenso:
+            num_ext_upper = numero_extenso.strip().upper()
+            numero_final = CONVERSAO_CAPITULOS_EXTENSO_PARA_NUM.get(num_ext_upper, num_ext_upper)
+
+        cabecalho = f"{tipo_cap} {numero_final}."
+        if titulo_opcional:
+            palavras_titulo = []
+            for p in titulo_opcional.split():
+                if p.isupper() and len(p) > 1:
+                    palavras_titulo.append(p)
+                else:
+                    palavras_titulo.append(p.capitalize())
+            titulo_formatado = " ".join(palavras_titulo)
+            return f"\n\n{cabecalho}\n\n{titulo_formatado}"
+        return f"\n\n{cabecalho}\n\n"
+
+    padrao = re.compile(
+        r'(?i)(cap[íi]tulo|cap\.?)\s+'
+        r'(?:(\d+|[IVXLCDM]+)|([A-ZÇÉÊÓÃÕa-zçéêóãõ]+))'
+        r'\s*[:\-.]?\s*'
+        r'(?=\S)([^\n]*)?',
+        re.IGNORECASE
+    )
+    texto = padrao.sub(substituir_cap, texto)
+
+    def substituir_extenso_com_titulo(match):
+        num_ext = match.group(1).strip().upper()
+        titulo = match.group(2).strip().title()
+        numero = CONVERSAO_CAPITULOS_EXTENSO_PARA_NUM.get(num_ext, num_ext)
+        return f"CAPÍTULO {numero}: {titulo}"
+
+    padrao_extenso_titulo = re.compile(r'CAP[IÍ]TULO\s+([A-ZÇÉÊÓÃÕ]+)\s*[:\-]\s*(.+)', re.IGNORECASE)
+    texto = padrao_extenso_titulo.sub(substituir_extenso_com_titulo, texto)
+    return texto
+
+def _remover_numeros_pagina_isolados(texto):
+    linhas = texto.splitlines()
+    novas_linhas = []
+    for linha in linhas:
+        if re.match(r'^\s*\d+\s*$', linha):
+            continue
+        linha = re.sub(r'\s{3,}\d+\s*$', '', linha)
+        novas_linhas.append(linha)
+    return '\n'.join(novas_linhas)
+
+def _normalizar_caixa_alta_linhas(texto):
+    linhas = texto.splitlines()
+    texto_final = []
+    for linha in linhas:
+        if not re.match(r'^\s*CAP[ÍI]TULO\s+[\w\d]+\.?\s*$', linha, re.IGNORECASE):
+            if linha.isupper() and len(linha.strip()) > 3 and any(c.isalpha() for c in linha):
+                palavras = []
+                for p in linha.split():
+                    if len(p) > 1 and p.isupper() and p.isalpha() and p not in ['I', 'A', 'E', 'O', 'U']:
+                        if not (sum(1 for char in p if char in "AEIOU") > 0 and \
+                                sum(1 for char in p if char not in "AEIOU") > 0 and len(p) <=4) :
+                            palavras.append(p)
+                            continue
+                    palavras.append(p.capitalize())
+                texto_final.append(" ".join(palavras))
+            else:
+                texto_final.append(linha)
+        else:
+            texto_final.append(linha)
+    return "\n".join(texto_final)
+
+def _corrigir_hifenizacao_quebras(texto):
+    return re.sub(r'(\w+)-\s*\n\s*(\w+)', r'\1\2', texto)
+
+def _remover_metadados_pdf(texto):
+    texto = re.sub(r'^\s*[\w\d_-]+\.indd\s+\d+\s+\d{2}/\d{2}/\d{2,4}\s+\d{1,2}:\d{2}(:\d{2})?\s*([AP]M)?\s*$', '', texto, flags=re.MULTILINE)
+    return texto
+
+def _expandir_abreviacoes_numeros(texto: str) -> str:
+    """Expande abreviações comuns (removendo o ponto da abrev.) e converte números."""
+
+    for abrev_re, expansao in CASOS_ESPECIAIS_RE.items():
+         texto = re.sub(abrev_re, expansao, texto, flags=re.IGNORECASE)
+
+    def replace_abrev_com_ponto(match):
+        abrev_encontrada = match.group(1)
+        expansao = ABREVIACOES_MAP_LOWER.get(abrev_encontrada.lower())
+        if expansao:
+            return expansao
+        else:
+            return match.group(0)
+
+    chaves_escapadas = [re.escape(k) for k in ABREVIACOES_MAP_LOWER.keys() if '.' not in k and 'ª' not in k]
+    if chaves_escapadas:
+        padrao_abrev_simples = r'\b(' + '|'.join(chaves_escapadas) + r')\.'
+        texto = re.sub(padrao_abrev_simples, replace_abrev_com_ponto, texto, flags=re.IGNORECASE)
+
+    # Conversão de números cardinais
+    def _converter_numero_match(match):
+        num_str = match.group(0)
+        try:
+            if re.match(r'^\d{4}$', num_str) and (1900 <= int(num_str) <= 2100): return num_str
+            if len(num_str) > 7 : return num_str
+            return num2words(int(num_str), lang='pt_BR')
+        except Exception: return num_str
+    texto = re.sub(r'\b\d+\b', _converter_numero_match, texto)
+
+    # Conversão de valores monetários
+    def _converter_valor_monetario_match(match):
+        valor_inteiro = match.group(1).replace('.', '')
+        try: return f"{num2words(int(valor_inteiro), lang='pt_BR')} reais"
+        except Exception: return match.group(0)
+    texto = re.sub(r'R\$\s*(\d{1,3}(?:\.\d{3})*),(\d{2})', _converter_valor_monetario_match, texto)
+    texto = re.sub(r'R\$\s*(\d+)(?:,00)?', lambda m: f"{num2words(int(m.group(1)), lang='pt_BR')} reais" if m.group(1) else m.group(0) , texto)
+
+    # Conversão de intervalos numéricos
+    texto = re.sub(r'\b(\d+)\s*-\s*(\d+)\b', lambda m: f"{num2words(int(m.group(1)), lang='pt_BR')} a {num2words(int(m.group(2)), lang='pt_BR')}", texto)
+    
+    return texto
+
+def _converter_ordinais_para_extenso(texto: str) -> str:
+    """Converte números ordinais como 1º, 2a, 3ª para extenso."""
+
+    def substituir_ordinal(match):
+        numero = match.group(1)
+        terminacao = match.group(2).lower()
+
+        try:
+            num_int = int(numero)
+            if terminacao == 'o' or terminacao == 'º':
+                return num2words(num_int, lang='pt_BR', to='ordinal')
+            elif terminacao == 'a' or terminacao == 'ª':
+                ordinal_masc = num2words(num_int, lang='pt_BR', to='ordinal')
+                if ordinal_masc.endswith('o'):
+                    return ordinal_masc[:-1] + 'a'
+                else:
+                    return ordinal_masc
+            else:
+                return match.group(0)
+        except ValueError:
+            return match.group(0)
+
+    padrao_ordinal = re.compile(r'\b(\d+)\s*([oaºª])(?!\w)', re.IGNORECASE)
+    texto = padrao_ordinal.sub(substituir_ordinal, texto)
+
+    return texto
+
+# ================== FUNÇÃO PRINCIPAL DE FORMATAÇÃO ==================
+def formatar_texto_para_tts(texto_bruto: str) -> str:
+    print("⚙️ Aplicando formatações ao texto para TTS...")
+    texto = texto_bruto
+
+    # 0. Normalizações e remoções básicas
+    texto = unicodedata.normalize('NFKC', texto)
+    texto = texto.replace('\f', '\n\n')
+    texto = texto.replace('*', '') # Remove asteriscos
+    caracteres_para_espaco = ['_', '#', '@']
+    caracteres_para_remover = ['(', ')', '\\', '[', ']']
+    for char in caracteres_para_espaco: texto = texto.replace(char, ' ')
+    for char in caracteres_para_remover: texto = texto.replace(char, '')
+    texto = re.sub(r'\{.*?\}', '', texto) # Remove conteúdo entre chaves (e as chaves)
+
+    # 1. Pré-limpeza de espaços múltiplos e linhas vazias
+    texto = re.sub(r'[ \t]+', ' ', texto) # Múltiplos espaços/tabs para um único espaço
+    texto = "\n".join([linha.strip() for linha in texto.splitlines() if linha.strip()]) # Remove linhas vazias e espaços em branco das extremidades
+
+    # 2. JUNTAR LINHAS DENTRO DE PARÁGRAFOS INTENCIONAIS
+    paragrafos_originais = texto.split('\n\n')
+    paragrafos_processados = []
+    for paragrafo_bruto in paragrafos_originais:
+        paragrafo_bruto = paragrafo_bruto.strip()
+        if not paragrafo_bruto:
+            continue
+        linhas_do_paragrafo = paragrafo_bruto.split('\n')
+        buffer_linha_atual = ""
+        for i, linha in enumerate(linhas_do_paragrafo):
+            linha_strip = linha.strip()
+            if not linha_strip:
+                continue
+            juntar_com_anterior = False
+            if buffer_linha_atual:
+                ultima_palavra_buffer = buffer_linha_atual.split()[-1].lower() if buffer_linha_atual else ""
+                termina_abreviacao = ultima_palavra_buffer in ABREVIACOES_QUE_NAO_TERMINAM_FRASE
+                termina_sigla_ponto = re.search(r'\b[A-Z]\.$', buffer_linha_atual) is not None
+                termina_pontuacao_forte = re.search(r'[.!?…]$', buffer_linha_atual)
+                nao_juntar = False
+                if termina_pontuacao_forte and not termina_abreviacao and not termina_sigla_ponto:
+                     if linha_strip and linha_strip[0].isupper(): nao_juntar = True
+                if termina_abreviacao or termina_sigla_ponto: juntar_com_anterior = True
+                elif not nao_juntar and not termina_pontuacao_forte: juntar_com_anterior = True
+                elif buffer_linha_atual.lower() in ['doutora', 'senhora', 'senhor', 'doutor']: juntar_com_anterior = True
+            if juntar_com_anterior: buffer_linha_atual += " " + linha_strip
+            else:
+                if buffer_linha_atual: paragrafos_processados.append(buffer_linha_atual)
+                buffer_linha_atual = linha_strip
+        if buffer_linha_atual: paragrafos_processados.append(buffer_linha_atual)
+    texto = '\n\n'.join(paragrafos_processados)
+    
+    # 3. Limpeza de espaços e quebras
+    texto = re.sub(r'[ \t]+', ' ', texto) # Reduz múltiplos espaços a um único
+    texto = re.sub(r'(?<!\n)\n(?!\n)', ' ', texto) # Transforma quebras de linha simples em espaço
+    texto = re.sub(r'\n{3,}', '\n\n', texto) # Reduz múltiplas quebras de parágrafo para duas
+
+    # 4. Formatações que operam melhor no texto mais estruturado
+    texto = _remover_metadados_pdf(texto)
+    texto = _remover_numeros_pagina_isolados(texto)
+    texto = _corrigir_hifenizacao_quebras(texto)
+    texto = _formatar_numeracao_capitulos(texto)
+
+    # 5. REINTRODUZIR QUEBRAS DE PARÁGRAFO (\n\n) INTELIGENTEMENTE
+    segmentos = re.split(r'([.!?…])\s*', texto)
+    texto_reconstruido = ""; buffer_segmento = ""
+    for i in range(0, len(segmentos), 2):
+        parte_texto = segmentos[i]
+        pontuacao = segmentos[i+1] if i + 1 < len(segmentos) else ""
+        segmento_completo = (parte_texto + pontuacao).strip()
+        if not segmento_completo: continue
+        ultima_palavra = segmento_completo.split()[-1].lower() if segmento_completo else ""
+        ultima_palavra_sem_ponto = ultima_palavra.rstrip('.!?…') if pontuacao else ultima_palavra
+        termina_abreviacao_conhecida = ultima_palavra in ABREVIACOES_QUE_NAO_TERMINAM_FRASE or \
+                                        ultima_palavra_sem_ponto in ABREVIACOES_QUE_NAO_TERMINAM_FRASE
+        termina_sigla_padrao = SIGLA_COM_PONTOS_RE.search(segmento_completo) is not None
+        nao_quebrar = False
+        if pontuacao == '.':
+             if termina_abreviacao_conhecida or termina_sigla_padrao: nao_quebrar = True
+        if buffer_segmento: buffer_segmento += " " + segmento_completo
+        else: buffer_segmento = segmento_completo
+        if not nao_quebrar: texto_reconstruido += buffer_segmento + "\n\n"; buffer_segmento = ""
+    if buffer_segmento:
+         texto_reconstruido += buffer_segmento
+         if not re.search(r'[.!?…)]$', buffer_segmento): texto_reconstruido += "."
+         texto_reconstruido += "\n\n"
+    texto = texto_reconstruido.strip()
+
+    # 6. Formatações Finais (Caixa, Ordinais, Cardinais, etc.)
+    texto = _normalizar_caixa_alta_linhas(texto)
+    texto = _converter_ordinais_para_extenso(texto)
+    texto = _expandir_abreviacoes_numeros(texto)
+
+    # NOVA ETAPA 6.5: Limpeza Pós-Expansão
+    formas_expandidas_tratamento = ['Senhor', 'Senhora', 'Doutor', 'Doutora', 'Professor', 'Professora', 'Excelentíssimo', 'Excelentíssima']
+    for forma in formas_expandidas_tratamento:
+        padrao_limpeza = r'\b' + re.escape(forma) + r'\.\s+([A-Z])'
+        texto = re.sub(padrao_limpeza, rf'{forma} \1', texto)
+        padrao_limpeza_sem_espaco = r'\b' + re.escape(forma) + r'\.([A-Z])'
+        texto = re.sub(padrao_limpeza_sem_espaco, rf'{forma} \1', texto)
+        
+    texto = re.sub(r'\b([A-Z])\.\s+([A-Z])', r'\1. \2', texto)
+    texto = re.sub(r'\b([A-Z])\.\s+([A-Z][a-z])', r'\1. \2', texto)
+
+
+    # 7. Limpeza Final de Parágrafos Vazios e Espaços
+    paragrafos_finais = texto.split('\n\n')
+    paragrafos_formatados_final = []
+    for p in paragrafos_finais:
+        p_strip = p.strip()
+        if not p_strip: continue
+        if not re.search(r'[.!?…)]$', p_strip) and \
+           not re.match(r'^\s*CAP[ÍI]TULO\s+[\w\d]+\.?\s*$', p_strip.split('\n')[0].strip(), re.IGNORECASE):
+            p_strip += '.'
+        paragrafos_formatados_final.append(p_strip)
+    texto = '\n\n'.join(paragrafos_formatados_final)
+    texto = re.sub(r'[ \t]+', ' ', texto).strip()
+    texto = re.sub(r'\n{2,}', '\n\n', texto)
+
+    print("✅ Formatação de texto para TTS concluída.")
+    return texto.strip()
+
+# ================== FIM DAS FUNÇÕES E CONSTANTES DE LIMPEZA DE TEXTO ==================
+
 
 # Função para extrair texto de diferentes tipos de arquivo
 async def get_text_from_file(file_path: str, task_id: str):
@@ -34,37 +378,48 @@ async def get_text_from_file(file_path: str, task_id: str):
 
     try:
         if filename.endswith('.pdf'):
+            # Para PDFs, usaremos PyPDF2 para extração e depois a formatação.
+            # Se você tivesse o pdftotext instalado (com Poppler), poderia usar:
+            # from pathlib import Path
+            # temp_txt_path = Path(file_path).with_suffix('.txt')
+            # if converter_pdf_para_txt(file_path, str(temp_txt_path)):
+            #     text = temp_txt_path.read_text(encoding='utf-8')
+            #     temp_txt_path.unlink() # Limpa o temp
+            # else:
+            #     raise Exception("Falha na conversão PDF para TXT.")
+
             reader = PdfReader(file_path)
-            total_parts = len(reader.pages)
+            total_pages = len(reader.pages)
             for i, page in enumerate(reader.pages):
                 extracted_page_text = page.extract_text()
                 if extracted_page_text:
                     text += extracted_page_text + "\n"
-                progress = int(((i + 1) / total_parts) * 50)
-                conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Página {i+1}/{total_parts})..."})
-                await asyncio.sleep(0.01)
+                progress = int(((i + 1) / total_pages) * 50)
+                conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto de PDF (Página {i+1}/{total_pages})..."})
+                await asyncio.sleep(0.01) # Pequena pausa para não bloquear o loop de eventos
+
         elif filename.endswith('.txt'):
-            with open(file_path, 'r', encoding='utf-8') as f:
+            # Usar chardet para detectar encoding e ler
+            raw_data = open(file_path, 'rb').read()
+            detected_encoding = chardet.detect(raw_data)['encoding'] or 'utf-8'
+            with open(file_path, 'r', encoding=detected_encoding, errors='replace') as f:
                 text = f.read()
             conversion_tasks[task_id].update({"progress": 50, "message": "Texto de arquivo TXT lido."})
         elif filename.endswith('.docx'):
             doc = Document(file_path)
-            total_parts = len(doc.paragraphs)
+            total_paragraphs = len(doc.paragraphs)
             for i, paragraph in enumerate(doc.paragraphs):
                 text += paragraph.text + "\n"
-                progress = int(((i + 1) / total_parts) * 50)
-                conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Parágrafo {i+1}/{total_parts})..."})
+                progress = int(((i + 1) / total_paragraphs) * 50)
+                conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto de DOCX (Parágrafo {i+1}/{total_paragraphs})..."})
                 await asyncio.sleep(0.01)
         elif filename.endswith('.epub'):
-            book = epub.read_epub(file_path)
-            document_items = [item for item in book.get_items() if item.get_type() == epub.ITEM_DOCUMENT]
-            total_parts = len(document_items)
-            for i, item in enumerate(document_items):
-                soup = BeautifulSoup(item.get_content(), 'html.parser')
-                text += soup.get_text(separator='\n') + "\n"
-                progress = int(((i + 1) / total_parts) * 50)
-                conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto (Capítulo {i+1}/{total_parts})..."})
-                await asyncio.sleep(0.01)
+            # Utiliza a função extrair_texto_de_epub do script original, adaptada aqui.
+            # Esta função lida com o HTML interno do EPUB e usa html2text e BeautifulSoup.
+            # A função extrair_texto_de_epub precisa ser definida ou seu conteúdo inline aqui.
+            # Por simplicidade, vou incluí-la como uma função auxiliar aqui.
+            text = _extrair_texto_de_epub_helper(file_path) # Usaremos uma versão helper interna
+            conversion_tasks[task_id].update({"progress": 50, "message": "Texto de arquivo EPUB extraído."})
 
         conversion_tasks[task_id].update({"progress": 50, "message": "Extração de texto concluída."})
         print(f"Extração de texto para {filename} concluída. Total de caracteres: {len(text)}.")
@@ -73,6 +428,47 @@ async def get_text_from_file(file_path: str, task_id: str):
         print(f"Erro na extração de texto de {filename}: {e}")
         conversion_tasks[task_id].update({"status": "failed", "message": f"Erro na extração de texto: {str(e)}"})
         raise
+
+# Função auxiliar para extração de EPUB (adaptada do seu script original)
+def _extrair_texto_de_epub_helper(caminho_epub: str) -> str:
+    """Extrai texto de arquivos EPUB usando EbookLib, BeautifulSoup e html2text."""
+    texto_completo = ""
+    try:
+        # EbookLib é mais robusto para a estrutura do EPUB
+        book = epub.read_epub(caminho_epub)
+        document_items = [item for item in book.get_items() if item.get_type() == epub.ITEM_DOCUMENT]
+
+        h = html2text.HTML2Text()
+        h.ignore_links = True
+        h.ignore_images = True
+        h.ignore_emphasis = False
+        h.body_width = 0 # Desabilita quebra de linha por largura
+
+        for item in document_items:
+            try:
+                html_bytes = item.get_content()
+                detected_encoding = chardet.detect(html_bytes)['encoding'] or 'utf-8'
+                html_texto = html_bytes.decode(detected_encoding, errors='replace')
+                
+                soup = BeautifulSoup(html_texto, 'html.parser')
+                # Remove tags que geralmente não contêm conteúdo principal a ser lido
+                for tag in soup(['nav', 'header', 'footer', 'style', 'script', 'figure', 'figcaption', 'aside', 'link', 'meta']):
+                    tag.decompose()
+                
+                content_tag = soup.find('body') or soup # Tenta pegar o body, senão usa a soup inteira
+                if content_tag:
+                    texto_completo += h.handle(str(content_tag)) + "\n\n"
+            except Exception as e_file:
+                print(f"⚠️ Erro ao processar item EPUB '{item.id}': {e_file}")
+
+        if not texto_completo.strip():
+            print("⚠️ Nenhum conteúdo textual extraído do EPUB.")
+            return ""
+        return texto_completo
+    except Exception as e:
+        print(f"❌ Erro geral ao processar EPUB '{caminho_epub}': {e}")
+        return ""
+
 
 async def get_available_voices():
     global cached_voices
@@ -117,6 +513,7 @@ async def get_available_voices():
             "pt-BR-AntonioNeural": "Antonio (Masculina, Neural) - Fallback"
         }
 
+# Função de tarefa de background para realizar a conversão
 async def perform_conversion_task(task_id: str, file_path: str, voice: str):
     try:
         conversion_tasks[task_id].update({"status": "extracting", "message": "Iniciando extração de texto...", "progress": 0})
@@ -125,29 +522,80 @@ async def perform_conversion_task(task_id: str, file_path: str, voice: str):
         if not text:
             conversion_tasks[task_id].update({"status": "failed", "message": "Não foi possível extrair texto do arquivo."})
             return
+        
+        # === CHAME A FUNÇÃO DE FORMATAÇÃO DE TEXTO AQUI ===
+        conversion_tasks[task_id].update({"status": "formatting", "message": "Formatando texto para melhor leitura TTS...", "progress": 55})
+        text_formatted = formatar_texto_para_tts(text)
+        if not text_formatted.strip():
+            conversion_tasks[task_id].update({"status": "failed", "message": "Texto vazio após formatação. Nenhuma leitura TTS possível."})
+            return
 
         audio_filename = os.path.splitext(os.path.basename(file_path))[0] + ".mp3"
         audio_filepath = os.path.join("audiobooks", audio_filename)
         conversion_tasks[task_id]["file_path"] = audio_filepath
-        conversion_tasks[task_id]["total_characters"] = len(text)
+        conversion_tasks[task_id]["total_characters"] = len(text_formatted) # Use o texto formatado para contagem
 
-        print(f"Iniciando geração de áudio com Edge TTS (Voz: {voice}) para {len(text)} caracteres...")
-        conversion_tasks[task_id].update({"status": "converting", "message": "Convertendo texto em áudio...", "progress": 50})
+        print(f"Iniciando geração de áudio com Edge TTS (Voz: {voice}) para {len(text_formatted)} caracteres formatados...")
+        conversion_tasks[task_id].update({"status": "converting", "message": "Convertendo texto em áudio...", "progress": 60})
 
-        communicate = edge_tts.Communicate(text, voice)
+        # O Edge TTS geralmente lida melhor com chunks menores para evitar timeouts ou falhas.
+        # Re-implementando uma divisão de texto simples para TTS aqui no main.py,
+        # baseada na lógica de `dividir_texto_para_tts` do seu script original,
+        # mas sem a complexidade de `tqdm` ou progresso a cada chunk para o frontend
+        # (o frontend já tem seu próprio polling de progresso geral).
+
+        # Usar uma divisão de texto simples (pode ser refinada depois se necessário)
+        # Limite de caracteres por chunk para Edge TTS (valor padrão testado em ambientes web)
+        # Se você encontrar "NoAudioReceived" ou timeouts, pode ser necessário reduzir este limite.
+        LIMITE_CARACTERES_CHUNK_TTS = 7000 # Um valor seguro para Edge TTS
+
+        text_chunks = []
+        current_chunk = ""
+        # Quebra por parágrafo primeiro
+        paragraphs = text_formatted.split('\n\n')
+        for p in paragraphs:
+            if not p.strip():
+                continue
+            if len(current_chunk) + len(p) + 2 <= LIMITE_CARACTERES_CHUNK_TTS: # +2 para o \n\n
+                current_chunk += (("\n\n" if current_chunk else "") + p)
+            else:
+                if current_chunk:
+                    text_chunks.append(current_chunk)
+                current_chunk = p # Inicia novo chunk com este parágrafo
+        if current_chunk: # Adiciona o último chunk
+            text_chunks.append(current_chunk)
+
+        if not text_chunks:
+            conversion_tasks[task_id].update({"status": "failed", "message": "Nenhuma parte de texto válida para conversão após divisão."})
+            return
+
+        total_chunks = len(text_chunks)
         audio_data_bytes = b""
-        chunk_counter = 0
+        
+        for i, chunk in enumerate(text_chunks):
+            # Atualiza o progresso baseado nos chunks processados
+            progress_tts = int(60 + ((i + 1) / total_chunks) * 35) # 60% para formatação + 35% para TTS
+            conversion_tasks[task_id].update({"progress": progress_tts, "message": f"Gerando áudio (Parte {i+1}/{total_chunks})..."})
+            
+            # Tenta converter o chunk
+            try:
+                communicate = edge_tts.Communicate(chunk, voice)
+                async for audio_chunk in communicate.stream():
+                    if audio_chunk["type"] == "audio":
+                        audio_data_bytes += audio_chunk["data"]
+                
+                # Pequena pausa para não sobrecarregar
+                await asyncio.sleep(0.01)
 
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_data_bytes += chunk["data"]
-                chunk_counter += 1
-                progress_tts = int(50 + (chunk_counter / 500) * 50)
-                progress_tts = min(progress_tts, 99)
-                conversion_tasks[task_id].update({"progress": progress_tts, "message": f"Gerando áudio ({progress_tts-50}% concluído)..."})
-                await asyncio.sleep(0.001)
-            elif chunk["type"] == "end":
-                print(f"Fim do stream TTS para tarefa {task_id}.")
+            except edge_tts.exceptions.NoAudioReceived:
+                print(f"⚠️ Chunk {i+1}/{total_chunks}: Sem áudio recebido. Pode ser texto inválido ou serviço temporariamente indisponível.")
+                # Pode adicionar um placeholder de silêncio ou um pequeno aviso sonoro aqui
+            except asyncio.TimeoutError:
+                print(f"⚠️ Chunk {i+1}/{total_chunks}: Timeout na comunicação TTS.")
+            except Exception as e_tts_chunk:
+                print(f"❌ Erro ao converter chunk {i+1}/{total_chunks}: {e_tts_chunk}")
+                print(traceback.format_exc())
+                # Continua para o próximo chunk, mas a qualidade do áudio final será afetada.
 
         with open(audio_filepath, "wb") as out:
             out.write(audio_data_bytes)
@@ -168,8 +616,6 @@ async def read_root():
     with open("static/index.html", "r", encoding="utf-8") as f:
         return f.read()
 
-# Rota /set_ngrok_token removida
-
 @app.get("/voices", response_class=JSONResponse)
 async def list_voices_endpoint():
     voices = await get_available_voices()
@@ -177,7 +623,6 @@ async def list_voices_endpoint():
 
 @app.post("/process_file")
 async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-BR-ThalitaMultilingualNeural", background_tasks: BackgroundTasks = BackgroundTasks()):
-    # Verificação de NGROK_AUTH_TOKEN removida
     
     current_available_voices = await get_available_voices()
     if voice not in current_available_voices:
