@@ -12,16 +12,14 @@ from bs4 import BeautifulSoup
 import traceback
 import json
 import uuid
-import re # Importar para as funções de regex
-import unicodedata # Importar para normalização de texto
+import re
+import unicodedata
 
 import nest_asyncio
 
-# Importações para as novas funcionalidades de limpeza de texto
-# Módulos que precisam estar em requirements.txt
-from num2words import num2words # Para expandir números para extenso
-import chardet # Para detectar encoding de arquivos
-import html2text # Para extrair texto de HTML (usado em EPUB)
+from num2words import num2words
+import chardet
+import html2text
 
 nest_asyncio.apply()
 
@@ -33,7 +31,6 @@ cached_voices = {}
 conversion_tasks = {}
 
 # ================== CONFIGURAÇÕES E MAPAS PARA LIMPEZA DE TEXTO ==================
-# Estas constantes e mapas são do seu arquivo Conversor_TTS_com_MP4_09.04.2025.py
 
 ABREVIACOES_MAP = {
     'dr': 'Doutor', 'd': 'Dona', 'dra': 'Doutora',
@@ -55,7 +52,6 @@ ABREVIACOES_MAP = {
     'ed': 'Edição', 'ltda': 'Limitada'
 }
 
-# Pré-processar para busca case-insensitive mais rápida
 ABREVIACOES_MAP_LOWER = {k.lower(): v for k, v in ABREVIACOES_MAP.items()}
 
 CASOS_ESPECIAIS_RE = {
@@ -87,14 +83,8 @@ ABREVIACOES_QUE_NAO_TERMINAM_FRASE = set([
 SIGLA_COM_PONTOS_RE = re.compile(r'\b([A-Z]\.\s*)+$')
 
 # ================== FUNÇÕES AUXILIARES DE LIMPEZA DE TEXTO ==================
-# Copiadas do seu arquivo original
 
 def _formatar_numeracao_capitulos(texto):
-    """
-    Localiza títulos como 'Capítulo 1 Mesmo em pleno verão...' ou 'CAPÍTULO UM ...'
-    e converte para: '\n\nCAPÍTULO 1.\n\nMesmo em pleno verão...'
-    Também padroniza números por extenso para arábicos.
-    """
     def substituir_cap(match):
         tipo_cap = match.group(1).upper()
         numero_rom_arab = match.group(2)
@@ -254,16 +244,16 @@ def formatar_texto_para_tts(texto_bruto: str) -> str:
     # 0. Normalizações e remoções básicas
     texto = unicodedata.normalize('NFKC', texto)
     texto = texto.replace('\f', '\n\n')
-    texto = texto.replace('*', '') # Remove asteriscos
+    texto = texto.replace('*', '')
     caracteres_para_espaco = ['_', '#', '@']
     caracteres_para_remover = ['(', ')', '\\', '[', ']']
     for char in caracteres_para_espaco: texto = texto.replace(char, ' ')
     for char in caracteres_para_remover: texto = texto.replace(char, '')
-    texto = re.sub(r'\{.*?\}', '', texto) # Remove conteúdo entre chaves (e as chaves)
+    texto = re.sub(r'\{.*?\}', '', texto)
 
     # 1. Pré-limpeza de espaços múltiplos e linhas vazias
-    texto = re.sub(r'[ \t]+', ' ', texto) # Múltiplos espaços/tabs para um único espaço
-    texto = "\n".join([linha.strip() for linha in texto.splitlines() if linha.strip()]) # Remove linhas vazias e espaços em branco das extremidades
+    texto = re.sub(r'[ \t]+', ' ', texto)
+    texto = "\n".join([linha.strip() for linha in texto.splitlines() if linha.strip()])
 
     # 2. JUNTAR LINHAS DENTRO DE PARÁGRAFOS INTENCIONAIS
     paragrafos_originais = texto.split('\n\n')
@@ -298,9 +288,9 @@ def formatar_texto_para_tts(texto_bruto: str) -> str:
     texto = '\n\n'.join(paragrafos_processados)
     
     # 3. Limpeza de espaços e quebras
-    texto = re.sub(r'[ \t]+', ' ', texto) # Reduz múltiplos espaços a um único
-    texto = re.sub(r'(?<!\n)\n(?!\n)', ' ', texto) # Transforma quebras de linha simples em espaço
-    texto = re.sub(r'\n{3,}', '\n\n', texto) # Reduz múltiplas quebras de parágrafo para duas
+    texto = re.sub(r'[ \t]+', ' ', texto)
+    texto = re.sub(r'(?<!\n)\n(?!\n)', ' ', texto)
+    texto = re.sub(r'\n{3,}', '\n\n', texto)
 
     # 4. Formatações que operam melhor no texto mais estruturado
     texto = _remover_metadados_pdf(texto)
@@ -378,16 +368,6 @@ async def get_text_from_file(file_path: str, task_id: str):
 
     try:
         if filename.endswith('.pdf'):
-            # Para PDFs, usaremos PyPDF2 para extração e depois a formatação.
-            # Se você tivesse o pdftotext instalado (com Poppler), poderia usar:
-            # from pathlib import Path
-            # temp_txt_path = Path(file_path).with_suffix('.txt')
-            # if converter_pdf_para_txt(file_path, str(temp_txt_path)):
-            #     text = temp_txt_path.read_text(encoding='utf-8')
-            #     temp_txt_path.unlink() # Limpa o temp
-            # else:
-            #     raise Exception("Falha na conversão PDF para TXT.")
-
             reader = PdfReader(file_path)
             total_pages = len(reader.pages)
             for i, page in enumerate(reader.pages):
@@ -396,10 +376,9 @@ async def get_text_from_file(file_path: str, task_id: str):
                     text += extracted_page_text + "\n"
                 progress = int(((i + 1) / total_pages) * 50)
                 conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto de PDF (Página {i+1}/{total_pages})..."})
-                await asyncio.sleep(0.01) # Pequena pausa para não bloquear o loop de eventos
+                await asyncio.sleep(0.01)
 
         elif filename.endswith('.txt'):
-            # Usar chardet para detectar encoding e ler
             raw_data = open(file_path, 'rb').read()
             detected_encoding = chardet.detect(raw_data)['encoding'] or 'utf-8'
             with open(file_path, 'r', encoding=detected_encoding, errors='replace') as f:
@@ -414,11 +393,7 @@ async def get_text_from_file(file_path: str, task_id: str):
                 conversion_tasks[task_id].update({"progress": progress, "message": f"Extraindo texto de DOCX (Parágrafo {i+1}/{total_paragraphs})..."})
                 await asyncio.sleep(0.01)
         elif filename.endswith('.epub'):
-            # Utiliza a função extrair_texto_de_epub do script original, adaptada aqui.
-            # Esta função lida com o HTML interno do EPUB e usa html2text e BeautifulSoup.
-            # A função extrair_texto_de_epub precisa ser definida ou seu conteúdo inline aqui.
-            # Por simplicidade, vou incluí-la como uma função auxiliar aqui.
-            text = _extrair_texto_de_epub_helper(file_path) # Usaremos uma versão helper interna
+            text = _extrair_texto_de_epub_helper(file_path)
             conversion_tasks[task_id].update({"progress": 50, "message": "Texto de arquivo EPUB extraído."})
 
         conversion_tasks[task_id].update({"progress": 50, "message": "Extração de texto concluída."})
@@ -429,12 +404,9 @@ async def get_text_from_file(file_path: str, task_id: str):
         conversion_tasks[task_id].update({"status": "failed", "message": f"Erro na extração de texto: {str(e)}"})
         raise
 
-# Função auxiliar para extração de EPUB (adaptada do seu script original)
 def _extrair_texto_de_epub_helper(caminho_epub: str) -> str:
-    """Extrai texto de arquivos EPUB usando EbookLib, BeautifulSoup e html2text."""
     texto_completo = ""
     try:
-        # EbookLib é mais robusto para a estrutura do EPUB
         book = epub.read_epub(caminho_epub)
         document_items = [item for item in book.get_items() if item.get_type() == epub.ITEM_DOCUMENT]
 
@@ -442,7 +414,7 @@ def _extrair_texto_de_epub_helper(caminho_epub: str) -> str:
         h.ignore_links = True
         h.ignore_images = True
         h.ignore_emphasis = False
-        h.body_width = 0 # Desabilita quebra de linha por largura
+        h.body_width = 0
 
         for item in document_items:
             try:
@@ -451,11 +423,10 @@ def _extrair_texto_de_epub_helper(caminho_epub: str) -> str:
                 html_texto = html_bytes.decode(detected_encoding, errors='replace')
                 
                 soup = BeautifulSoup(html_texto, 'html.parser')
-                # Remove tags que geralmente não contêm conteúdo principal a ser lido
                 for tag in soup(['nav', 'header', 'footer', 'style', 'script', 'figure', 'figcaption', 'aside', 'link', 'meta']):
                     tag.decompose()
                 
-                content_tag = soup.find('body') or soup # Tenta pegar o body, senão usa a soup inteira
+                content_tag = soup.find('body') or soup
                 if content_tag:
                     texto_completo += h.handle(str(content_tag)) + "\n\n"
             except Exception as e_file:
@@ -513,7 +484,12 @@ async def get_available_voices():
             "pt-BR-AntonioNeural": "Antonio (Masculina, Neural) - Fallback"
         }
 
-# Função de tarefa de background para realizar a conversão
+# NOVO: Health Check endpoint para o Render
+@app.get("/health", response_class=JSONResponse)
+async def health_check():
+    return {"status": "ok", "message": "Application is healthy."}
+
+
 async def perform_conversion_task(task_id: str, file_path: str, voice: str):
     try:
         conversion_tasks[task_id].update({"status": "extracting", "message": "Iniciando extração de texto...", "progress": 0})
@@ -523,7 +499,6 @@ async def perform_conversion_task(task_id: str, file_path: str, voice: str):
             conversion_tasks[task_id].update({"status": "failed", "message": "Não foi possível extrair texto do arquivo."})
             return
         
-        # === CHAME A FUNÇÃO DE FORMATAÇÃO DE TEXTO AQUI ===
         conversion_tasks[task_id].update({"status": "formatting", "message": "Formatando texto para melhor leitura TTS...", "progress": 55})
         text_formatted = formatar_texto_para_tts(text)
         if not text_formatted.strip():
@@ -533,36 +508,26 @@ async def perform_conversion_task(task_id: str, file_path: str, voice: str):
         audio_filename = os.path.splitext(os.path.basename(file_path))[0] + ".mp3"
         audio_filepath = os.path.join("audiobooks", audio_filename)
         conversion_tasks[task_id]["file_path"] = audio_filepath
-        conversion_tasks[task_id]["total_characters"] = len(text_formatted) # Use o texto formatado para contagem
+        conversion_tasks[task_id]["total_characters"] = len(text_formatted)
 
         print(f"Iniciando geração de áudio com Edge TTS (Voz: {voice}) para {len(text_formatted)} caracteres formatados...")
         conversion_tasks[task_id].update({"status": "converting", "message": "Convertendo texto em áudio...", "progress": 60})
 
-        # O Edge TTS geralmente lida melhor com chunks menores para evitar timeouts ou falhas.
-        # Re-implementando uma divisão de texto simples para TTS aqui no main.py,
-        # baseada na lógica de `dividir_texto_para_tts` do seu script original,
-        # mas sem a complexidade de `tqdm` ou progresso a cada chunk para o frontend
-        # (o frontend já tem seu próprio polling de progresso geral).
-
-        # Usar uma divisão de texto simples (pode ser refinada depois se necessário)
-        # Limite de caracteres por chunk para Edge TTS (valor padrão testado em ambientes web)
-        # Se você encontrar "NoAudioReceived" ou timeouts, pode ser necessário reduzir este limite.
-        LIMITE_CARACTERES_CHUNK_TTS = 7000 # Um valor seguro para Edge TTS
+        LIMITE_CARACTERES_CHUNK_TTS = 7000
 
         text_chunks = []
         current_chunk = ""
-        # Quebra por parágrafo primeiro
         paragraphs = text_formatted.split('\n\n')
         for p in paragraphs:
             if not p.strip():
                 continue
-            if len(current_chunk) + len(p) + 2 <= LIMITE_CARACTERES_CHUNK_TTS: # +2 para o \n\n
+            if len(current_chunk) + len(p) + 2 <= LIMITE_CARACTERES_CHUNK_TTS:
                 current_chunk += (("\n\n" if current_chunk else "") + p)
             else:
                 if current_chunk:
                     text_chunks.append(current_chunk)
-                current_chunk = p # Inicia novo chunk com este parágrafo
-        if current_chunk: # Adiciona o último chunk
+                current_chunk = p
+        if current_chunk:
             text_chunks.append(current_chunk)
 
         if not text_chunks:
@@ -573,29 +538,24 @@ async def perform_conversion_task(task_id: str, file_path: str, voice: str):
         audio_data_bytes = b""
         
         for i, chunk in enumerate(text_chunks):
-            # Atualiza o progresso baseado nos chunks processados
-            progress_tts = int(60 + ((i + 1) / total_chunks) * 35) # 60% para formatação + 35% para TTS
+            progress_tts = int(60 + ((i + 1) / total_chunks) * 35)
             conversion_tasks[task_id].update({"progress": progress_tts, "message": f"Gerando áudio (Parte {i+1}/{total_chunks})..."})
             
-            # Tenta converter o chunk
             try:
                 communicate = edge_tts.Communicate(chunk, voice)
                 async for audio_chunk in communicate.stream():
                     if audio_chunk["type"] == "audio":
                         audio_data_bytes += audio_chunk["data"]
                 
-                # Pequena pausa para não sobrecarregar
                 await asyncio.sleep(0.01)
 
             except edge_tts.exceptions.NoAudioReceived:
                 print(f"⚠️ Chunk {i+1}/{total_chunks}: Sem áudio recebido. Pode ser texto inválido ou serviço temporariamente indisponível.")
-                # Pode adicionar um placeholder de silêncio ou um pequeno aviso sonoro aqui
             except asyncio.TimeoutError:
                 print(f"⚠️ Chunk {i+1}/{total_chunks}: Timeout na comunicação TTS.")
             except Exception as e_tts_chunk:
                 print(f"❌ Erro ao converter chunk {i+1}/{total_chunks}: {e_tts_chunk}")
                 print(traceback.format_exc())
-                # Continua para o próximo chunk, mas a qualidade do áudio final será afetada.
 
         with open(audio_filepath, "wb") as out:
             out.write(audio_data_bytes)
