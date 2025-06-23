@@ -14,6 +14,8 @@ import json
 import uuid
 import re
 import unicodedata
+import subprocess # NOVO: Para chamar FFmpeg
+from pathlib import Path # NOVO: Para manipulação de caminhos de forma mais robusta
 
 import nest_asyncio
 import aiohttp
@@ -31,6 +33,9 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 cached_voices = {}
 conversion_tasks = {}
 GEMINI_API_KEY = None
+
+# NOVO: Constante para o executável FFmpeg
+FFMPEG_BIN = "ffmpeg"
 
 # ================== CONFIGURAÇÕES E MAPAS PARA LIMPEZA DE TEXTO ==================
 
@@ -578,8 +583,73 @@ def _limpar_nome_arquivo(filename: str) -> str:
     # Limita o tamanho do nome do arquivo para evitar problemas de caminho muito longo
     return cleaned_name[:100]
 
+# NOVO: Função para unificar arquivos de áudio temporários usando FFmpeg
+def _unificar_audios_ffmpeg(lista_arquivos_temp: list, arquivo_final: str) -> bool:
+    """Une arquivos de áudio temporários em um único arquivo final usando FFmpeg."""
+    if not lista_arquivos_temp:
+        print("⚠️ Nenhum arquivo de áudio para unificar.")
+        return False
+    
+    # Cria um arquivo de lista para o FFmpeg concat demuxer
+    # Usar caminhos absolutos para o file list é mais seguro no Render
+    dir_saida = os.path.dirname(arquivo_final)
+    os.makedirs(dir_saida, exist_ok=True) # Garante que o diretório de saída existe
 
-async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_gemini_enhancement: bool = False, book_title: str = None): # Adicionado book_title
+    # Limpa o nome do arquivo de lista para evitar caracteres problemáticos
+    nome_lista_limpo = f"filelist_{uuid.uuid4().hex}.txt" # Nome único para evitar colisões
+    lista_txt_path = os.path.join(dir_saida, nome_lista_limpo)
+
+    try:
+        with open(lista_txt_path, "w", encoding='utf-8') as f_list:
+            for temp_file in lista_arquivos_temp:
+                # FFmpeg concat demuxer precisa de caminhos "safe".
+                # A melhor prática é usar paths relativos se possível ou escapar.
+                # No Render, os arquivos estão no mesmo diretório, então path relativo simples funciona.
+                # Ou, para máxima segurança, path absoluto e '-safe 0'. Vamos com absoluto + safe 0.
+                safe_path = str(Path(temp_file).resolve()).replace("'", r"\'") # Escapa aspas
+                f_list.write(f"file '{safe_path}'\n")
+        
+        comando = [
+            FFMPEG_BIN, '-y',           # Sobrescreve saída sem perguntar
+            '-f', 'concat',             # Usa o demuxer de concatenação
+            '-safe', '0',               # Permite caminhos absolutos ou não sanitizados no arquivo de lista
+            '-i', lista_txt_path,       # O arquivo de lista como entrada
+            '-c', 'copy',               # Copia os codecs de áudio sem reencodar (muito rápido)
+            arquivo_final               # O arquivo de saída final
+        ]
+        
+        # O subprocess.run não mostra progresso para -c copy, então não passamos total_duration
+        process = subprocess.run(comando, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        
+        if process.returncode != 0:
+            print(f"\n❌ Erro durante a unificação de áudio (código {process.returncode}):")
+            print(process.stderr.decode(errors='ignore'))
+            return False
+
+        print(f"✅ Unificação de áudio concluída com sucesso para: {os.path.basename(arquivo_final)}")
+        return True
+
+    except FileNotFoundError:
+        print(f"❌ Comando '{FFMPEG_BIN}' não encontrado. Certifique-se de que o FFmpeg está instalado no ambiente.")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Erro ao unificar áudio com FFmpeg: {e.stderr.decode(errors='ignore')}")
+        return False
+    except Exception as e:
+        print(f"❌ Erro inesperado durante a unificação de áudio: {str(e)}")
+        print(traceback.format_exc())
+        return False
+    finally:
+        # Remove o arquivo de lista temporário
+        if os.path.exists(lista_txt_path):
+            try:
+                os.remove(lista_txt_path)
+                print(f"🧹 Arquivo de lista temporário removido: {os.path.basename(lista_txt_path)}")
+            except Exception as e_unlink:
+                print(f"⚠️ Não foi possível remover o arquivo de lista temporário {os.path.basename(lista_txt_path)}: {e_unlink}")
+
+
+async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_gemini_enhancement: bool = False, book_title: str = None):
     try:
         conversion_tasks[task_id].update({"status": "extracting", "message": "Iniciando extração de texto...", "progress": 0})
         text = await get_text_from_file(file_path, task_id)
@@ -611,19 +681,22 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
             return
 
         # === Lógica para nomear o arquivo MP3 com o título do livro ===
-        if book_title:
+        if book_title and book_title.strip(): # Garante que o título não é apenas espaços em branco
             # Usa o título fornecido pelo usuário e o sanitiza
-            base_filename = _limpar_nome_arquivo(book_title)
-            # Adiciona um sufixo para garantir unicidade, ou apenas "audiobook"
-            if not base_filename: # Se o título fornecido for inválido após a limpeza
-                base_filename = f"{_limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])}_audiobook"
-            else: # Adiciona o nome do arquivo original para evitar colisões
-                base_filename = f"{base_filename}_{_limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])[:15]}"
+            base_filename_clean = _limpar_nome_arquivo(book_title)
+            # Para evitar colisões, adiciona um hash curto ou parte do nome original se o título for comum.
+            # Decidimos usar book_title_nome_original_curto.mp3
+            original_filename_stem = _limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])
+            # Se o título limpo for muito curto ou igual ao original, adiciona um sufixo para desambiguar
+            if len(base_filename_clean) < 3 or original_filename_stem.startswith(base_filename_clean):
+                 final_audio_name_base = f"{base_filename_clean}_{original_filename_stem[:15]}"
+            else:
+                 final_audio_name_base = base_filename_clean
         else:
             # Fallback para o nome do arquivo original, como antes
-            base_filename = _limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])
+            final_audio_name_base = _limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])
         
-        audio_filename = f"{base_filename}.mp3"
+        audio_filename = f"{final_audio_name_base}.mp3"
         audio_filepath = os.path.join("audiobooks", audio_filename)
         conversion_tasks[task_id]["file_path"] = audio_filepath
         conversion_tasks[task_id]["total_characters"] = len(text_formatted)
@@ -631,8 +704,8 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
         print(f"Iniciando geração de áudio com Edge TTS (Voz: {voice}) para {len(text_formatted)} caracteres formatados...")
         conversion_tasks[task_id].update({"status": "converting", "message": "Convertendo texto em áudio...", "progress": 60})
 
-        LIMITE_CARACTERES_CHUNK_TTS = 7000
-        CONCURRENCY_LIMIT = 5
+        LIMITE_CARACTERES_CHUNK_TTS = 6000 # Ligeiramente menor para mais segurança
+        CONCURRENCY_LIMIT = 3 # Limite de requisições TTS concorrentes, mais conservador para evitar timeouts
 
         text_chunks = []
         current_chunk = ""
@@ -654,12 +727,21 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
             return
 
         total_chunks = len(text_chunks)
-        audio_data_bytes_ordered = [b""] * total_chunks
+        # Lista para armazenar caminhos para os arquivos MP3 temporários
+        temp_audio_chunk_paths = []
         
         semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
         all_tts_tasks = []
 
-        async def convert_chunk_with_retry(chunk_text, voice_id, chunk_index, max_retries=3):
+        # Certifica-se de que o diretório para chunks temporários existe
+        temp_chunks_dir = os.path.join("audiobooks", f"chunks_{task_id}")
+        os.makedirs(temp_chunks_dir, exist_ok=True)
+
+
+        async def convert_chunk_and_save_with_retry(chunk_text, voice_id, chunk_index, max_retries=3):
+            # Caminho do arquivo temporário para este chunk
+            chunk_temp_file = os.path.join(temp_chunks_dir, f"chunk_{chunk_index:04d}.mp3")
+            
             for attempt in range(max_retries):
                 try:
                     async with semaphore:
@@ -667,63 +749,80 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
                         conversion_tasks[task_id].update({"progress": progress_tts, "message": f"Gerando áudio (Parte {chunk_index+1}/{total_chunks}, Tentativa {attempt+1})..."})
 
                         communicate = edge_tts.Communicate(chunk_text, voice_id)
-                        chunk_audio_bytes = b""
-                        async for audio_chunk_part in communicate.stream():
-                            if audio_chunk_part["type"] == "audio":
-                                chunk_audio_bytes += audio_chunk_part["data"]
                         
-                        if chunk_audio_bytes:
-                            print(f"✅ Chunk {chunk_index+1}/{total_chunks} concluído com sucesso.")
-                            return chunk_audio_bytes
+                        # Salva o chunk diretamente para o arquivo temporário
+                        await communicate.save(chunk_temp_file)
+                        
+                        # Verifica se o arquivo foi criado e não está vazio
+                        if os.path.exists(chunk_temp_file) and os.path.getsize(chunk_temp_file) > 100: # Pequeno tamanho mínimo para ser válido
+                            print(f"✅ Chunk {chunk_index+1}/{total_chunks} concluído com sucesso e salvo em: {os.path.basename(chunk_temp_file)}")
+                            return chunk_temp_file # Retorna o caminho do arquivo temporário
                         else:
-                            print(f"⚠️ Chunk {chunk_index+1}/{total_chunks}: Sem áudio recebido (tentativa {attempt+1}).")
-                            raise edge_tts.exceptions.NoAudioReceived
+                            print(f"⚠️ Chunk {chunk_index+1}/{total_chunks}: Arquivo de áudio temporário inválido/vazio (tamanho: {os.path.getsize(chunk_temp_file) if os.path.exists(chunk_temp_file) else 0} bytes) (tentativa {attempt+1}).")
+                            os.remove(chunk_temp_file) if os.path.exists(chunk_temp_file) else None # Limpa arquivo inválido
+                            raise edge_tts.exceptions.NoAudioReceived # Força retentativa ou tratamento de erro
 
                 except edge_tts.exceptions.NoAudioReceived:
-                    print(f"❌ Chunk {chunk_index+1}/{total_chunks}: Sem áudio. Retentando...")
+                    print(f"❌ Chunk {chunk_index+1}/{total_chunks}: Sem áudio recebido. Retentando...")
                 except asyncio.TimeoutError:
-                    print(f"❌ Chunk {chunk_index+1}/{total_chunks}: Timeout. Retentando...")
+                    print(f"❌ Chunk {chunk_index+1}/{total_chunks}: Timeout na comunicação TTS. Retentando...")
                 except Exception as e_chunk:
                     print(f"❌ Erro inesperado no chunk {chunk_index+1}/{total_chunks} (tentativa {attempt+1}): {type(e_chunk).__name__} - {e_chunk}")
                     print(traceback.format_exc())
-                
+                    os.remove(chunk_temp_file) if os.path.exists(chunk_temp_file) else None # Limpa em caso de erro
+
                 if attempt < max_retries - 1:
                     await asyncio.sleep(2 ** attempt)
             
             print(f"❌ Falha definitiva no chunk {chunk_index+1}/{total_chunks} após {max_retries} tentativas.")
-            return b""
+            return None # Retorna None se todas as retentativas falharem
 
         for i, chunk_text in enumerate(text_chunks):
-            task = asyncio.create_task(convert_chunk_with_retry(chunk_text, voice, i))
+            task = asyncio.create_task(convert_chunk_and_save_with_retry(chunk_text, voice, i))
             all_tts_tasks.append(task)
 
+        # Executa todas as tarefas concorrentemente e coleta os caminhos dos arquivos temporários
         results = await asyncio.gather(*all_tts_tasks, return_exceptions=True)
 
-        for i, result in enumerate(results):
-            if isinstance(result, bytes):
-                audio_data_bytes_ordered[i] = result
-            else:
-                audio_data_bytes_ordered[i] = b""
-
-        final_audio_data = b"".join(audio_data_bytes_ordered)
-
-        if not final_audio_data:
+        # Filtra apenas os caminhos de arquivos válidos
+        successful_chunk_files = [res for res in results if isinstance(res, str) and os.path.exists(res) and os.path.getsize(res) > 100] # Garante que é um path válido e o arquivo existe/não está vazio
+        
+        if not successful_chunk_files:
             conversion_tasks[task_id].update({"status": "failed", "message": "Nenhum áudio válido foi gerado para o audiobook."})
             return
 
-        with open(audio_filepath, "wb") as out:
-            out.write(final_audio_data)
-        print(f"Áudio para tarefa {task_id} gerado e salvo em {audio_filepath}.")
+        # === NOVO: Unificar áudios temporários usando FFmpeg ===
+        conversion_tasks[task_id].update({"status": "merging_audio", "message": "Unificando partes do áudio...", "progress": 98})
+        print(f"Unificando {len(successful_chunk_files)} arquivos de áudio temporários com FFmpeg...")
+        
+        if _unificar_audios_ffmpeg(successful_chunk_files, audio_filepath):
+            print(f"Áudio final para tarefa {task_id} gerado e salvo em {audio_filepath}.")
+            conversion_tasks[task_id].update({"status": "completed", "message": "Audiobook pronto para download!", "progress": 100})
+        else:
+            conversion_tasks[task_id].update({"status": "failed", "message": "Falha ao unificar partes do áudio. O audiobook pode estar incompleto."})
+            print(f"❌ Falha ao unificar os áudios para tarefa {task_id}.")
+            return # Sai da função se a unificação falhar
 
-        conversion_tasks[task_id].update({"status": "completed", "message": "Audiobook pronto para download!", "progress": 100})
     except Exception as e:
         print(f"Erro na conversão da tarefa {task_id}: {e}")
         print(traceback.format_exc())
         conversion_tasks[task_id].update({"status": "failed", "message": f"Erro na conversão: {str(e)}"})
     finally:
+        # Limpar arquivo de entrada original
         if os.path.exists(file_path):
             os.remove(file_path)
-            print(f"Arquivo de texto temporário {os.path.basename(file_path)} removido.")
+            print(f"Arquivo de texto original temporário {os.path.basename(file_path)} removido.")
+        
+        # Limpar todos os chunks temporários gerados, mesmo em caso de falha ou cancelamento
+        if os.path.exists(temp_chunks_dir):
+            for temp_chunk_file in os.listdir(temp_chunks_dir):
+                try:
+                    os.remove(os.path.join(temp_chunks_dir, temp_chunk_file))
+                except Exception as e_clean_chunk:
+                    print(f"⚠️ Erro ao remover chunk temporário '{temp_chunk_file}': {e_clean_chunk}")
+            os.rmdir(temp_chunks_dir) # Tenta remover o diretório vazio
+            print(f"🧹 Diretório de chunks temporários removido: {os.path.basename(temp_chunks_dir)}")
+
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
@@ -740,7 +839,7 @@ async def process_file_endpoint(
     file: UploadFile = File(...),
     voice: str = "pt-BR-ThalitaMultilingualNeural",
     use_gemini: bool = Form(False),
-    book_title: str = Form(None), # Novo parâmetro opcional para o título do livro
+    book_title: str = Form(None),
     background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     
@@ -768,7 +867,6 @@ async def process_file_endpoint(
         "total_characters": 0
     }
 
-    # Passa o novo parâmetro 'book_title' para a tarefa de conversão
     background_tasks.add_task(perform_conversion_task, temp_input_filepath, voice, task_id, use_gemini_enhancement=use_gemini, book_title=book_title)
 
     return JSONResponse({"task_id": task_id, "message": "Processamento iniciado. Use o endpoint /status para verificar o progresso."})
@@ -788,7 +886,7 @@ async def download_audiobook(task_id: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=404, detail="Audiobook não encontrado ou ainda não pronto para download.")
 
     audio_filepath = status["file_path"]
-    filename = os.path.basename(audio_filepath) # O nome do arquivo já inclui o título do livro se fornecido
+    filename = os.path.basename(audio_filepath)
 
     response = FileResponse(audio_filepath, media_type="audio/mpeg", filename=filename, background=background_tasks)
 
