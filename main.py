@@ -510,7 +510,7 @@ async def enhance_text_with_gemini(text: str) -> str:
     2.  **Pontuação Otimizada para Leitura:** Ajuste a pontuação (vírgulas, pontos, etc.) para que o ritmo da leitura TTS seja o mais natural possível, adicionando pausas onde necessário e removendo onde for excessivo.
     3.  **Expansão de Abreviaturas Ambíguas:** Expanda abreviaturas que podem causar confusão na leitura, como "Dr." para "Doutor", "Sra." para "Senhora", "etc." para "etcétera".
     4.  **Normalização de Números e Valores:** Converta números (cardinais e ordinais) para seus equivalentes por extenso (ex: "1" para "um", "2º" para "segundo"). Converta valores monetários (ex: "R$ 10,50" para "dez reais e cinquenta centavos"). Mantenha números grandes (como anos ou números de telefone) em formato numérico se a pronúncia for clara.
-    5.  **Remoção de Elementos Visuais:** Remova caracteres, símbolos ou formatos que são visuais e não contribuem para a leitura em áudio (ex: `*`, `_`, `[ ]`, `{ }`, links completos, metadados de PDF como "página 1 de 10").
+    5.  **Remoção de Elementos Visuais:** Remova caracteres, símbolos ou formatos que são visuais e não contribuem para a leitura em áudio (ex: `*`, `_`, `[ ]`, `{{ }}`, links completos, metadados de PDF como "página 1 de 10").
     6.  **Fluxo Contínuo:** Garanta que o texto flua naturalmente, como se fosse falado por uma pessoa.
     7.  **Manter o Sentido Original:** A edição deve melhorar a legibilidade para TTS, mas não alterar o significado do conteúdo original.
     8.  **Capítulos:** Se houver formatação de capítulos (ex: "CAPÍTULO I", "CAPÍTULO 1", "CAPÍTULO UM"), certifique-se de que a formatação esteja clara e com quebras de parágrafo adequadas.
