@@ -16,10 +16,9 @@ import re
 import unicodedata
 import subprocess
 from pathlib import Path
-
+from tempfile import NamedTemporaryFile
 import nest_asyncio
 import aiohttp
-
 from num2words import num2words
 import chardet
 import html2text
@@ -39,6 +38,12 @@ async def get_voices_endpoint():
 # Isso significa que seu index.html estará em /static/index.html se você quiser acessá-lo por lá,
 # mas a rota principal do app será sempre /.
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/status/{task_id}")
+async def get_task_status(task_id: str):
+    if task_id not in conversion_tasks:
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada.")
+    return conversion_tasks[task_id]
 
 # NOVO: Rota explícita para servir o index.html na raiz do seu domínio
 @app.get("/", response_class=HTMLResponse)
@@ -513,6 +518,41 @@ async def get_available_voices():
 @app.get("/health", response_class=JSONResponse)
 async def health_check():
     return {"status": "ok", "message": "Application is healthy."}
+
+@app.post("/process_file")
+async def process_file_endpoint(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    voice: str = Form(...),
+    use_gemini: bool = Form(False),
+    book_title: str = Form(None)
+):
+    try:
+        if not file:
+            raise HTTPException(status_code=400, detail="Arquivo não enviado.")
+
+        # Salva arquivo temporariamente
+        temp_file = NamedTemporaryFile(delete=False, dir="uploads", suffix=os.path.splitext(file.filename)[-1])
+        with open(temp_file.name, "wb") as f:
+            content = await file.read()
+            f.write(content)
+
+        # Gera ID da tarefa
+        task_id = str(uuid.uuid4())
+        conversion_tasks[task_id] = {
+            "status": "in_queue",
+            "message": "Tarefa recebida.",
+            "progress": 0
+        }
+
+        # Executa conversão em segundo plano
+        background_tasks.add_task(perform_conversion_task, temp_file.name, voice, task_id, use_gemini, book_title)
+
+        return JSONResponse({"task_id": task_id})
+
+    except Exception as e:
+        print(f"Erro no endpoint /process_file: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao iniciar o processamento.")
 
 # Endpoint para receber a chave API do Gemini
 @app.post("/set_gemini_api_key")
