@@ -28,6 +28,13 @@ nest_asyncio.apply()
 
 app = FastAPI()
 
+from fastapi.responses import JSONResponse
+
+@app.get("/voices", response_class=JSONResponse)
+async def get_voices_endpoint():
+    voices = await get_available_voices()
+    return voices
+
 # NOVO: Monta StaticFiles para servir arquivos do diretório 'static' no prefixo '/static'
 # Isso significa que seu index.html estará em /static/index.html se você quiser acessá-lo por lá,
 # mas a rota principal do app será sempre /.
