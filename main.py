@@ -28,7 +28,12 @@ nest_asyncio.apply()
 
 app = FastAPI()
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# NOVO: Monta StaticFiles para servir arquivos do diretório 'static' na raiz
+# Isso fará com que '/index.html' seja servido por padrão em '/'
+app.mount("/", StaticFiles(directory="static", html=True), name="static_root")
+
+# As rotas /voices, /process_file, /status, /download e /set_gemini_api_key
+# continuarão a funcionar normalmente.
 
 cached_voices = {}
 conversion_tasks = {}
@@ -683,10 +688,10 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
         if book_title and book_title.strip():
             base_filename_clean = _limpar_nome_arquivo(book_title)
             original_filename_stem = _limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])
-            if not base_filename_clean: # Se o título limpo for vazio, usa o nome do arquivo original
+            if not base_filename_clean:
                  final_audio_name_base = original_filename_stem
-            else: # Se o título limpo é válido, usa-o, e adiciona parte do nome original para evitar colisões
-                 final_audio_name_base = f"{base_filename_clean}_{original_filename_stem[:20]}" # 20 chars do original
+            else:
+                 final_audio_name_base = f"{base_filename_clean}_{original_filename_stem[:20]}"
         else:
             final_audio_name_base = _limpar_nome_arquivo(os.path.splitext(os.path.basename(file_path))[0])
         
@@ -698,8 +703,8 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
         print(f"Iniciando geração de áudio com Edge TTS (Voz: {voice}) para {len(text_formatted)} caracteres formatados...")
         conversion_tasks[task_id].update({"status": "converting", "message": "Convertendo texto em áudio...", "progress": 60})
 
-        LIMITE_CARACTERES_CHUNK_TTS = 5000 # Reduzindo para maior segurança e compatibilidade com APIs
-        CONCURRENCY_LIMIT = 2 # Reduzindo para evitar sobrecarga no plano gratuito
+        LIMITE_CARACTERES_CHUNK_TTS = 5000
+        CONCURRENCY_LIMIT = 2
 
         text_chunks = []
         current_chunk = ""
