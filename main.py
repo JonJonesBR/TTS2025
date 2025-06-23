@@ -503,18 +503,21 @@ async def set_gemini_api_key_endpoint(api_key: str = Form(...)):
 # Função para interagir com a API do Google Gemini para melhoria de texto
 async def enhance_text_with_gemini(text: str) -> str:
     prompt = f"""
-    Por favor, melhore, edite e formate o texto a seguir para garantir que seja lido de forma natural e clara por um sistema de Text-to-Speech (TTS) em português do Brasil.
+    Dado o texto de um livro, sua tarefa é revisá-lo e formatá-lo **exclusivamente para a narrativa principal a ser lida por um sistema de Text-to-Speech (TTS) em português do Brasil.**
 
-    Sua tarefa inclui:
-    1.  **Correção de Gramática e Ortografia:** Corrija quaisquer erros gramaticais, de concordância e de ortografia.
-    2.  **Pontuação Otimizada para Leitura:** Ajuste a pontuação (vírgulas, pontos, etc.) para que o ritmo da leitura TTS seja o mais natural possível, adicionando pausas onde necessário e removendo onde for excessivo.
-    3.  **Expansão de Abreviaturas Ambíguas:** Expanda abreviaturas que podem causar confusão na leitura, como "Dr." para "Doutor", "Sra." para "Senhora", "etc." para "etcétera".
-    4.  **Normalização de Números e Valores:** Converta números (cardinais e ordinais) para seus equivalentes por extenso (ex: "1" para "um", "2º" para "segundo"). Converta valores monetários (ex: "R$ 10,50" para "dez reais e cinquenta centavos"). Mantenha números grandes (como anos ou números de telefone) em formato numérico se a pronúncia for clara.
-    5.  **Remoção de Elementos Visuais:** Remova caracteres, símbolos ou formatos que são visuais e não contribuem para a leitura em áudio (ex: `*`, `_`, `[ ]`, `{{ }}`, links completos, metadados de PDF como "página 1 de 10").
-    6.  **Fluxo Contínuo:** Garanta que o texto flua naturalmente, como se fosse falado por uma pessoa.
-    7.  **Manter o Sentido Original:** A edição deve melhorar a legibilidade para TTS, mas não alterar o significado do conteúdo original.
-    8.  **Capítulos:** Se houver formatação de capítulos (ex: "CAPÍTULO I", "CAPÍTULO 1", "CAPÍTULO UM"), certifique-se de que a formatação esteja clara e com quebras de parágrafo adequadas.
-    9.  **Evitar Introduções/Conclusões da IA:** Não adicione nenhuma introdução ("Aqui está o texto melhorado...") ou conclusão ("Espero que isso ajude...") ao seu resultado. Forneça apenas o texto melhorado.
+    **Instruções Essenciais:**
+    1.  **Prioridade Total: Focar APENAS na história/conteúdo narrativo principal.**
+        * **Remova COMPLETAMENTE:** prefácios, agradecimentos, índices, bibliografias, notas de rodapé extensas, cabeçalhos e rodapés de página, números de página isolados, metadados de PDF, tabelas que não sejam parte da narrativa direta, e quaisquer outras seções que não sejam a história contada ou o conteúdo central do livro.
+        * **Mantenha APENAS:** O título do livro (se presente no início do texto narrativo) e o corpo da história/conteúdo principal.
+    2.  **Correção de Gramática e Ortografia:** Corrija quaisquer erros gramaticais, de concordância e de ortografia.
+    3.  **Pontuação Otimizada para Leitura:** Ajuste a pontuação (vírgulas, pontos, etc.) para que o ritmo da leitura TTS seja o mais natural possível, adicionando pausas onde necessário e removendo onde for excessivo.
+    4.  **Expansão de Abreviaturas Ambíguas:** Expanda abreviaturas que podem causar confusão na leitura, como "Dr." para "Doutor", "Sra." para "Senhora", "etc." para "etcétera".
+    5.  **Normalização de Números e Valores:** Converta números (cardinais e ordinais) para seus equivalentes por extenso (ex: "1" para "um", "2º" para "segundo"). Converta valores monetários (ex: "R$ 10,50" para "dez reais e cinquenta centavos"). Mantenha números grandes (como anos ou números de telefone) em formato numérico se a pronúncia for clara.
+    6.  **Remoção de Elementos Visuais:** Remova quaisquer caracteres, símbolos ou formatos que são estritamente visuais e não contribuem para a leitura em áudio (ex: `*`, `_`, `[ ]`, `{{ }}`, links completos, e qualquer outro tipo de formatação que não seja texto legível).
+    7.  **Fluxo Contínuo e Natural:** Garanta que o texto flua naturalmente, como se fosse falado por uma pessoa. O texto final não deve conter rupturas abruptas ou elementos que dificultem a fluidez da leitura em voz alta.
+    8.  **Manter o Sentido Original:** A edição deve melhorar a legibilidade para TTS, mas não alterar o significado ou a intenção do conteúdo original.
+    9.  **Capítulos:** Se houver formatação de capítulos (ex: "CAPÍTULO I", "CAPÍTULO 1", "CAPÍTULO UM"), certifique-se de que a formatação esteja clara e com quebras de parágrafo adequadas (ex: "\n\nCAPÍTULO [NÚMERO/TÍTULO]\n\n").
+    10. **Evitar Introduções/Conclusões da IA:** Não adicione nenhuma introdução ("Aqui está o texto melhorado...") ou conclusão ("Espero que isso ajude...") ao seu resultado. Forneça APENAS o texto revisado e formatado.
 
     Aqui está o texto a ser melhorado:
     ---
