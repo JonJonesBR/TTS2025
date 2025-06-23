@@ -10,7 +10,6 @@ from docx import Document
 from ebooklib import epub
 from bs4 import BeautifulSoup
 import traceback
-import json
 import uuid
 import re
 import unicodedata
@@ -22,10 +21,12 @@ import aiohttp
 from num2words import num2words
 import chardet
 import html2text
+import json
 
 nest_asyncio.apply()
 
 app = FastAPI()
+carregar_conversion_tasks()  # ✅ Carregamento das tarefas ao iniciar o app
 
 # Rota para verificação de saúde
 @app.get("/health", response_class=JSONResponse)
@@ -43,6 +44,7 @@ async def read_root():
 # === GLOBAIS E VARIÁVEIS DE CONTROLE ===
 cached_voices = {}
 conversion_tasks = {}
+TAREFAS_JSON = "conversion_tasks.json"
 GEMINI_API_KEY = None
 FFMPEG_BIN = "ffmpeg"
 
@@ -96,6 +98,23 @@ ABREVIACOES_QUE_NAO_TERMINAM_FRASE = set([
 ])
 
 SIGLA_COM_PONTOS_RE = re.compile(r'\b([A-Z]\.\s*)+$')
+
+def salvar_conversion_tasks():
+    try:
+        with open(TAREFAS_JSON, "w", encoding="utf-8") as f:
+            json.dump(conversion_tasks, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"⚠️ Erro ao salvar estado de tarefas: {e}")
+
+def carregar_conversion_tasks():
+    global conversion_tasks
+    if os.path.exists(TAREFAS_JSON):
+        try:
+            with open(TAREFAS_JSON, "r", encoding="utf-8") as f:
+                conversion_tasks.update(json.load(f))
+            print(f"📁 Tarefas carregadas do arquivo {TAREFAS_JSON}")
+        except Exception as e:
+            print(f"⚠️ Erro ao carregar arquivo de tarefas: {e}")
 
 def _formatar_numeracao_capitulos(texto):
     def substituir_cap(match):
@@ -884,3 +903,10 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
                 print(f"🧹 Diretório de chunks temporários removido: {os.path.basename(temp_chunks_dir)}")
             except Exception as e_rmdir:
                 print(f"⚠️ Erro ao remover diretório de chunks temporários: {e_rmdir}")
+from fastapi import Path
+
+@app.get("/status/{task_id}", response_class=JSONResponse)
+async def get_task_status(task_id: str = Path(..., description="UUID da tarefa a ser consultada.")):
+    if task_id not in conversion_tasks:
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada.")
+    return conversion_tasks[task_id]
