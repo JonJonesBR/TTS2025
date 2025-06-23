@@ -28,9 +28,16 @@ nest_asyncio.apply()
 
 app = FastAPI()
 
-# NOVO: Monta StaticFiles para servir arquivos do diretório 'static' na raiz
-# Isso fará com que '/index.html' seja servido por padrão em '/'
-app.mount("/", StaticFiles(directory="static", html=True), name="static_root")
+# NOVO: Monta StaticFiles para servir arquivos do diretório 'static' no prefixo '/static'
+# Isso significa que seu index.html estará em /static/index.html se você quiser acessá-lo por lá,
+# mas a rota principal do app será sempre /.
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# NOVO: Rota explícita para servir o index.html na raiz do seu domínio
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    with open("static/index.html", "r", encoding="utf-8") as f:
+        return f.read()
 
 # As rotas /voices, /process_file, /status, /download e /set_gemini_api_key
 # continuarão a funcionar normalmente.
@@ -179,7 +186,7 @@ def _remover_metadados_pdf(texto):
     return texto
 
 def _expandir_abreviacoes_numeros(texto: str) -> str:
-    """Expande abreviações comuns (removendo o ponto da abrev.) e converte números."""
+    """Expande abreviacões comuns (removendo o ponto da abrev.) e converte números."""
 
     for abrev_re, expansao in CASOS_ESPECIAIS_RE.items():
          texto = re.sub(abrev_re, expansao, texto, flags=re.IGNORECASE)
@@ -319,7 +326,7 @@ def formatar_texto_para_tts(texto_bruto: str) -> str:
         if not segmento_completo: continue
         ultima_palavra = segmento_completo.split()[-1].lower() if segmento_completo else ""
         ultima_palavra_sem_ponto = ultima_palavra.rstrip('.!?…') if pontuacao else ultima_palavra
-        termina_abreviacao_conhecida = ultima_palavra in ABREVIACOES_QUE_NAO_TERMINAM_FRASE or \
+        termina_abreviacao = ultima_palavra in ABREVIACOES_QUE_NAO_TERMINAM_FRASE or \
                                         ultima_palavra_sem_ponto in ABREVIACOES_QUE_NAO_TERMINAM_FRASE
         termina_sigla_padrao = SIGLA_COM_PONTOS_RE.search(segmento_completo) is not None
         nao_quebrar = False
