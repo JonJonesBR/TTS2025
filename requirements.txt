@@ -10,3 +10,4 @@ nest_asyncio
 num2words
 chardet
 html2text
+aiohttp

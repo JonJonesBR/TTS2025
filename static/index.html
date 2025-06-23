@@ -44,7 +44,7 @@
             font-weight: bold;
             color: #444;
         }
-        select, input[type="file"], input[type="text"] {
+        select, input[type="file"], input[type="text"], input[type="password"] {
             width: calc(100% - 20px);
             padding: 10px;
             margin: 0 auto 20px auto;
@@ -54,6 +54,11 @@
             background-color: #e9ecef;
             cursor: pointer;
             box-sizing: border-box;
+        }
+        input[type="checkbox"] {
+            width: auto;
+            margin-right: 10px;
+            cursor: pointer;
         }
         button {
             padding: 12px 25px;
@@ -129,8 +134,31 @@
             text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
             z-index: 1;
         }
-        .form-section {
-            /* display: none; -- REMOVIDO PARA SEMPRE MOSTRAR O FORM */
+        /* Removido .form-section { } vazio */
+        .gemini-setup {
+            background-color: #fff3e0;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            border: 1px solid #ffcc80;
+            text-align: left;
+        }
+        .gemini-setup h2 {
+            color: #e65100;
+            margin-top: 0;
+            font-size: 1.5em;
+            text-align: center;
+        }
+        .gemini-setup p, .gemini-setup ol {
+            color: #424242;
+            font-size: 0.95em;
+            line-height: 1.6;
+        }
+        .gemini-setup ol {
+            margin-left: 20px;
+        }
+        .gemini-setup ol li strong {
+            color: #d84315;
         }
         @media (max-width: 768px) {
             .container {
@@ -155,6 +183,22 @@
         <h1>Crie seu Audiobook Gratuitamente</h1>
         <p>Faça o upload de um arquivo PDF, TXT, EPUB, DOC/DOCX e converta-o em audiobook em segundos.</p>
         
+        <div class="gemini-setup" id="geminiSetupSection">
+            <h2>Melhoria Opcional com IA (Google Gemini)</h2>
+            <p>Para uma formatação de texto ainda mais avançada e revisão por inteligência artificial (IA), você pode usar a API do Google Gemini. Isso garante que o texto seja perfeitamente otimizado para leitura TTS (ex: expandir abreviações, normalizar números e valores monetários, otimizar pontuação).</p>
+            <ol>
+                <li>Vá para: <strong><a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com/app/apikey</a></strong></li>
+                <li>Faça login com sua conta Google.</li>
+                <li>Clique em "Create API Key in new project" para gerar uma nova chave.</li>
+                <li>Copie a chave gerada. Ela se parecerá com `AIzaSyC...`.</li>
+                <li>Cole a chave no campo abaixo e clique em "Salvar Chave API".</li>
+            </ol>
+            <label for="geminiApiKeyInput">Sua Chave API do Google Gemini:</label>
+            <input type="password" id="geminiApiKeyInput" placeholder="Cole sua chave API aqui">
+            <button id="setGeminiApiKeyButton">Salvar Chave API</button>
+            <div id="geminiMessage" class="message"></div>
+            <div id="geminiError" class="error"></div>
+        </div>
 
         <form id="uploadForm" enctype="multipart/form-data" class="form-section">
             <h2>Gerar seu Audiobook</h2>
@@ -162,6 +206,12 @@
             <select id="voiceSelect" name="voice">
                 </select>
             <br><br>
+            
+            <label for="useGeminiEnhancement" style="display: flex; align-items: center; justify-content: center; margin-bottom: 20px; cursor: pointer;">
+                <input type="checkbox" id="useGeminiEnhancement" name="use_gemini_enhancement">
+                Usar IA Gemini para aprimorar o texto (requer chave API configurada)
+            </label>
+
             <input type="file" name="file" id="fileInput" accept=".pdf,.txt,.epub,.doc,.docx">
             <button type="submit" id="submitButton">Gerar Audiobook</button>
         </form>
@@ -184,6 +234,14 @@
         const progressContainer = document.getElementById('progressContainer');
         const progressBar = document.getElementById('progressBar');
         const progressText = document.getElementById('progressText');
+
+        const geminiSetupSection = document.getElementById('geminiSetupSection');
+        const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
+        const setGeminiApiKeyButton = document.getElementById('setGeminiApiKeyButton');
+        const geminiMessageDiv = document.getElementById('geminiMessage');
+        const geminiErrorDiv = document.getElementById('geminiError');
+        const useGeminiEnhancementCheckbox = document.getElementById('useGeminiEnhancement');
+
 
         let pollingInterval;
         let startTime;
@@ -220,7 +278,9 @@
 
         function clearAllMessages() {
             messageDiv.style.display = 'none';
-            errorDiv.style.display = 'none';           
+            errorDiv.style.display = 'none';
+            geminiMessageDiv.style.display = 'none';
+            geminiErrorDiv.style.display = 'none';
             clearInterval(pollingInterval);
             progressContainer.style.display = 'none';
             progressBar.style.width = '0%';
@@ -255,6 +315,44 @@
             loadVoices();
         });
 
+        setGeminiApiKeyButton.addEventListener('click', async function() {
+            clearAllMessages();
+            const geminiApiKey = geminiApiKeyInput.value.trim();
+
+            if (!geminiApiKey) {
+                showStatus(geminiErrorDiv, 'Por favor, insira sua chave API do Gemini.', true);
+                return;
+            }
+
+            setGeminiApiKeyButton.disabled = true;
+            geminiApiKeyInput.disabled = true;
+            showStatus(geminiMessageDiv, 'Salvando chave API do Gemini...', false);
+
+            try {
+                const response = await fetch('/set_gemini_api_key', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: `api_key=${encodeURIComponent(geminiApiKey)}`
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    showStatus(geminiMessageDiv, result.message, false);
+                } else {
+                    const errorData = await response.json();
+                    showStatus(geminiErrorDiv, `Erro ao salvar chave API: ${errorData.detail || 'Erro desconhecido'}`, true);
+                }
+            } catch (error) {
+                console.error('Erro ao enviar chave API Gemini:', error);
+                showStatus(geminiErrorDiv, 'Erro de conexão ao salvar chave API. Verifique o servidor.', true);
+            } finally {
+                setGeminiApiKeyButton.disabled = false;
+                geminiApiKeyInput.disabled = false;
+            }
+        });
+
         uploadForm.addEventListener('submit', async function(event) {
             event.preventDefault();
 
@@ -274,11 +372,13 @@
             const formData = new FormData();
             formData.append('file', fileInput.files[0]);
             formData.append('voice', selectedVoice);
+            formData.append('use_gemini', useGeminiEnhancementCheckbox.checked);
 
             showStatus(messageDiv, 'Enviando arquivo e iniciando processamento...', false, 0, 'Iniciando...');
             submitButton.disabled = true;
             fileInput.disabled = true;
             voiceSelect.disabled = true;
+            useGeminiEnhancementCheckbox.disabled = true;
 
             try {
                 const processResponse = await fetch('/process_file', {
@@ -292,6 +392,7 @@
                     submitButton.disabled = false;
                     fileInput.disabled = false;
                     voiceSelect.disabled = false;
+                    useGeminiEnhancementCheckbox.disabled = false;
                     return;
                 }
 
@@ -310,6 +411,7 @@
                             submitButton.disabled = false;
                             fileInput.disabled = false;
                             voiceSelect.disabled = false;
+                            useGeminiEnhancementCheckbox.disabled = false;
                             return;
                         }
 
@@ -335,6 +437,7 @@
                             submitButton.disabled = false;
                             fileInput.disabled = false;
                             voiceSelect.disabled = false;
+                            useGeminiEnhancementCheckbox.disabled = false;
 
                         } else if (status === 'failed') {
                             clearInterval(pollingInterval);
@@ -342,6 +445,7 @@
                             submitButton.disabled = false;
                             fileInput.disabled = false;
                             voiceSelect.disabled = false;
+                            useGeminiEnhancementCheckbox.disabled = false;
                         }
                     } catch (error) {
                         clearInterval(pollingInterval);
@@ -350,6 +454,7 @@
                         submitButton.disabled = false;
                         fileInput.disabled = false;
                         voiceSelect.disabled = false;
+                        useGeminiEnhancementCheckbox.disabled = false;
                     }
                 }, 2000);
 
@@ -359,6 +464,7 @@
                 submitButton.disabled = false;
                 fileInput.disabled = false;
                 voiceSelect.disabled = false;
+                useGeminiEnhancementCheckbox.disabled = false;
             }
         });
     </script>

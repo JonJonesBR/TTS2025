@@ -16,6 +16,7 @@ import re
 import unicodedata
 
 import nest_asyncio
+import aiohttp
 
 from num2words import num2words
 import chardet
@@ -29,6 +30,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 cached_voices = {}
 conversion_tasks = {}
+GEMINI_API_KEY = None
 
 # ================== CONFIGURAÇÕES E MAPAS PARA LIMPEZA DE TEXTO ==================
 
@@ -484,13 +486,84 @@ async def get_available_voices():
             "pt-BR-AntonioNeural": "Antonio (Masculina, Neural) - Fallback"
         }
 
-# NOVO: Health Check endpoint para o Render
+# Endpoint de Health Check para o Render
 @app.get("/health", response_class=JSONResponse)
 async def health_check():
     return {"status": "ok", "message": "Application is healthy."}
 
+# Endpoint para receber a chave API do Gemini
+@app.post("/set_gemini_api_key")
+async def set_gemini_api_key_endpoint(api_key: str = Form(...)):
+    global GEMINI_API_KEY
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Chave API não pode ser vazia.")
+    GEMINI_API_KEY = api_key
+    return JSONResponse({"message": "Chave API do Gemini configurada com sucesso!"})
 
-async def perform_conversion_task(task_id: str, file_path: str, voice: str):
+# Função para interagir com a API do Google Gemini para melhoria de texto
+async def enhance_text_with_gemini(text: str) -> str:
+    prompt = f"""
+    Por favor, melhore, edite e formate o texto a seguir para garantir que seja lido de forma natural e clara por um sistema de Text-to-Speech (TTS) em português do Brasil.
+
+    Sua tarefa inclui:
+    1.  **Correção de Gramática e Ortografia:** Corrija quaisquer erros gramaticais, de concordância e de ortografia.
+    2.  **Pontuação Otimizada para Leitura:** Ajuste a pontuação (vírgulas, pontos, etc.) para que o ritmo da leitura TTS seja o mais natural possível, adicionando pausas onde necessário e removendo onde for excessivo.
+    3.  **Expansão de Abreviaturas Ambíguas:** Expanda abreviaturas que podem causar confusão na leitura, como "Dr." para "Doutor", "Sra." para "Senhora", "etc." para "etcétera".
+    4.  **Normalização de Números e Valores:** Converta números (cardinais e ordinais) para seus equivalentes por extenso (ex: "1" para "um", "2º" para "segundo"). Converta valores monetários (ex: "R$ 10,50" para "dez reais e cinquenta centavos"). Mantenha números grandes (como anos ou números de telefone) em formato numérico se a pronúncia for clara.
+    5.  **Remoção de Elementos Visuais:** Remova caracteres, símbolos ou formatos que são visuais e não contribuem para a leitura em áudio (ex: `*`, `_`, `[ ]`, `{ }`, links completos, metadados de PDF como "página 1 de 10").
+    6.  **Fluxo Contínuo:** Garanta que o texto flua naturalmente, como se fosse falado por uma pessoa.
+    7.  **Manter o Sentido Original:** A edição deve melhorar a legibilidade para TTS, mas não alterar o significado do conteúdo original.
+    8.  **Capítulos:** Se houver formatação de capítulos (ex: "CAPÍTULO I", "CAPÍTULO 1", "CAPÍTULO UM"), certifique-se de que a formatação esteja clara e com quebras de parágrafo adequadas.
+    9.  **Evitar Introduções/Conclusões da IA:** Não adicione nenhuma introdução ("Aqui está o texto melhorado...") ou conclusão ("Espero que isso ajude...") ao seu resultado. Forneça apenas o texto melhorado.
+
+    Aqui está o texto a ser melhorado:
+    ---
+    {text}
+    ---
+    """
+
+    chat_history = []
+    chat_history.append({"role": "user", "parts": [{"text": prompt}]})
+
+    payload = {
+        "contents": chat_history,
+        "generationConfig": {
+            "temperature": 0.7,
+            "topP": 0.95,
+            "topK": 60
+        }
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+            
+            async with session.post(api_url, headers={'Content-Type': 'application/json'}, json=payload) as response:
+                response.raise_for_status()
+                result = await response.json()
+                
+                if result.get("candidates") and \
+                   result["candidates"][0].get("content") and \
+                   result["candidates"][0]["content"].get("parts") and \
+                   result["candidates"][0]["content"]["parts"][0].get("text"):
+                    return result["candidates"][0]["content"]["parts"][0]["text"]
+                else:
+                    print("API Gemini retornou uma estrutura de resposta inesperada.")
+                    print(result)
+                    return text
+    except aiohttp.ClientResponseError as e:
+        print(f"Erro HTTP da API Gemini (Status: {e.status}): {e.message}")
+        if e.status == 400: print("Verifique se a chave API é válida ou se o texto contém conteúdo impróprio/grande demais para a IA.")
+        return text
+    except aiohttp.ClientError as e:
+        print(f"Erro de conexão ao chamar a API Gemini: {e}")
+        return text
+    except Exception as e:
+        print(f"Erro inesperado na função enhance_text_with_gemini: {e}")
+        print(traceback.format_exc())
+        return text
+
+async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_gemini_enhancement: bool = False):
     try:
         conversion_tasks[task_id].update({"status": "extracting", "message": "Iniciando extração de texto...", "progress": 0})
         text = await get_text_from_file(file_path, task_id)
@@ -499,10 +572,26 @@ async def perform_conversion_task(task_id: str, file_path: str, voice: str):
             conversion_tasks[task_id].update({"status": "failed", "message": "Não foi possível extrair texto do arquivo."})
             return
         
-        conversion_tasks[task_id].update({"status": "formatting", "message": "Formatando texto para melhor leitura TTS...", "progress": 55})
+        conversion_tasks[task_id].update({"status": "formatting", "message": "Formatando texto para melhor leitura TTS (Python nativo)...", "progress": 55})
         text_formatted = formatar_texto_para_tts(text)
+
+        if use_gemini_enhancement and GEMINI_API_KEY:
+            conversion_tasks[task_id].update({"status": "ai_enhancing", "message": "Revisando e melhorando texto com IA Gemini...", "progress": 57})
+            print(f"Iniciando melhoria de texto com IA Gemini para tarefa {task_id}...")
+            try:
+                gemini_enhanced_text = await enhance_text_with_gemini(text_formatted)
+                if gemini_enhanced_text.strip():
+                    text_formatted = gemini_enhanced_text
+                    print(f"Texto melhorado com Gemini para tarefa {task_id}.")
+                else:
+                    print(f"Gemini retornou texto vazio ou inválido para tarefa {task_id}. Usando texto original formatado.")
+            except Exception as e_gemini:
+                print(f"Erro ao usar Gemini para tarefa {task_id}: {e_gemini}. Prosseguindo com a formatação Python.")
+        elif use_gemini_enhancement and not GEMINI_API_KEY:
+            print(f"Usuário solicitou Gemini, mas a Chave API não está configurada para tarefa {task_id}. Prosseguindo com a formatação Python.")
+
         if not text_formatted.strip():
-            conversion_tasks[task_id].update({"status": "failed", "message": "Texto vazio após formatação. Nenhuma leitura TTS possível."})
+            conversion_tasks[task_id].update({"status": "failed", "message": "Texto vazio após formatação (ou IA). Nenhuma leitura TTS possível."})
             return
 
         audio_filename = os.path.splitext(os.path.basename(file_path))[0] + ".mp3"
@@ -514,6 +603,7 @@ async def perform_conversion_task(task_id: str, file_path: str, voice: str):
         conversion_tasks[task_id].update({"status": "converting", "message": "Convertendo texto em áudio...", "progress": 60})
 
         LIMITE_CARACTERES_CHUNK_TTS = 7000
+        CONCURRENCY_LIMIT = 5
 
         text_chunks = []
         current_chunk = ""
@@ -535,30 +625,65 @@ async def perform_conversion_task(task_id: str, file_path: str, voice: str):
             return
 
         total_chunks = len(text_chunks)
-        audio_data_bytes = b""
+        audio_data_bytes_ordered = [b""] * total_chunks
         
-        for i, chunk in enumerate(text_chunks):
-            progress_tts = int(60 + ((i + 1) / total_chunks) * 35)
-            conversion_tasks[task_id].update({"progress": progress_tts, "message": f"Gerando áudio (Parte {i+1}/{total_chunks})..."})
-            
-            try:
-                communicate = edge_tts.Communicate(chunk, voice)
-                async for audio_chunk in communicate.stream():
-                    if audio_chunk["type"] == "audio":
-                        audio_data_bytes += audio_chunk["data"]
-                
-                await asyncio.sleep(0.01)
+        semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
+        all_tts_tasks = []
 
-            except edge_tts.exceptions.NoAudioReceived:
-                print(f"⚠️ Chunk {i+1}/{total_chunks}: Sem áudio recebido. Pode ser texto inválido ou serviço temporariamente indisponível.")
-            except asyncio.TimeoutError:
-                print(f"⚠️ Chunk {i+1}/{total_chunks}: Timeout na comunicação TTS.")
-            except Exception as e_tts_chunk:
-                print(f"❌ Erro ao converter chunk {i+1}/{total_chunks}: {e_tts_chunk}")
-                print(traceback.format_exc())
+        async def convert_chunk_with_retry(chunk_text, voice_id, chunk_index, max_retries=3):
+            for attempt in range(max_retries):
+                try:
+                    async with semaphore:
+                        progress_tts = int(60 + (chunk_index / total_chunks) * 35)
+                        conversion_tasks[task_id].update({"progress": progress_tts, "message": f"Gerando áudio (Parte {chunk_index+1}/{total_chunks}, Tentativa {attempt+1})..."})
+
+                        communicate = edge_tts.Communicate(chunk_text, voice_id)
+                        chunk_audio_bytes = b""
+                        async for audio_chunk_part in communicate.stream():
+                            if audio_chunk_part["type"] == "audio":
+                                chunk_audio_bytes += audio_chunk_part["data"]
+                        
+                        if chunk_audio_bytes:
+                            print(f"✅ Chunk {chunk_index+1}/{total_chunks} concluído com sucesso.")
+                            return chunk_audio_bytes
+                        else:
+                            print(f"⚠️ Chunk {chunk_index+1}/{total_chunks}: Sem áudio recebido (tentativa {attempt+1}).")
+                            raise edge_tts.exceptions.NoAudioReceived
+
+                except edge_tts.exceptions.NoAudioReceived:
+                    print(f"❌ Chunk {chunk_index+1}/{total_chunks}: Sem áudio. Retentando...")
+                except asyncio.TimeoutError:
+                    print(f"❌ Chunk {chunk_index+1}/{total_chunks}: Timeout. Retentando...")
+                except Exception as e_chunk:
+                    print(f"❌ Erro inesperado no chunk {chunk_index+1}/{total_chunks} (tentativa {attempt+1}): {type(e_chunk).__name__} - {e_chunk}")
+                    print(traceback.format_exc())
+                
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+            
+            print(f"❌ Falha definitiva no chunk {chunk_index+1}/{total_chunks} após {max_retries} tentativas.")
+            return b""
+
+        for i, chunk_text in enumerate(text_chunks):
+            task = asyncio.create_task(convert_chunk_with_retry(chunk_text, voice, i))
+            all_tts_tasks.append(task)
+
+        results = await asyncio.gather(*all_tts_tasks, return_exceptions=True)
+
+        for i, result in enumerate(results):
+            if isinstance(result, bytes):
+                audio_data_bytes_ordered[i] = result
+            else:
+                audio_data_bytes_ordered[i] = b""
+
+        final_audio_data = b"".join(audio_data_bytes_ordered)
+
+        if not final_audio_data:
+            conversion_tasks[task_id].update({"status": "failed", "message": "Nenhum áudio válido foi gerado para o audiobook."})
+            return
 
         with open(audio_filepath, "wb") as out:
-            out.write(audio_data_bytes)
+            out.write(final_audio_data)
         print(f"Áudio para tarefa {task_id} gerado e salvo em {audio_filepath}.")
 
         conversion_tasks[task_id].update({"status": "completed", "message": "Audiobook pronto para download!", "progress": 100})
@@ -582,7 +707,7 @@ async def list_voices_endpoint():
     return voices
 
 @app.post("/process_file")
-async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-BR-ThalitaMultilingualNeural", background_tasks: BackgroundTasks = BackgroundTasks()):
+async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-BR-ThalitaMultilingualNeural", use_gemini: bool = Form(False), background_tasks: BackgroundTasks = BackgroundTasks()):
     
     current_available_voices = await get_available_voices()
     if voice not in current_available_voices:
@@ -608,7 +733,7 @@ async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-B
         "total_characters": 0
     }
 
-    background_tasks.add_task(perform_conversion_task, task_id, temp_input_filepath, voice)
+    background_tasks.add_task(perform_conversion_task, temp_input_filepath, voice, task_id, use_gemini_enhancement=use_gemini)
 
     return JSONResponse({"task_id": task_id, "message": "Processamento iniciado. Use o endpoint /status para verificar o progresso."})
 
