@@ -948,4 +948,3 @@ async def perform_conversion_task(file_path: str, voice: str, task_id: str, use_
                 print(f"🧹 Diretório de chunks temporários removido: {os.path.basename(temp_chunks_dir)}")
             except Exception as e_rmdir:
                 print(f"⚠️ Erro ao remover diretório de chunks temporários: {e_rmdir}")
-from fastapi import Path
