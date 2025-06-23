@@ -23,6 +23,7 @@ from num2words import num2words
 import chardet
 import html2text
 import json
+from typing import Optional
 
 nest_asyncio.apply()
 
@@ -540,21 +541,22 @@ async def process_file_endpoint(
     file: UploadFile = File(...),
     voice: str = Form(...),
     use_gemini: bool = Form(False),
-    book_title: str = Form(None)
+    book_title: Optional[str] = Form(None)  # <--- ALTERE ESTA LINHA
 ):
-    """Recebe o arquivo e inicia o processo de conversão em segundo plano."""
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="Arquivo inválido ou não enviado.")
-    
-    # Salva arquivo temporário de forma segura
+
+    # O resto da função permanece igual...
     try:
         suffix = Path(file.filename).suffix
+        # Usando NamedTemporaryFile dentro de um with para garantir que seja fechado
         with NamedTemporaryFile(delete=False, dir="uploads", suffix=suffix) as temp_file:
             contents = await file.read()
             temp_file.write(contents)
             temp_file_path = temp_file.name
     except Exception as e:
-        print(f"❌ Erro ao salvar arquivo temporário: {e}")
+        # Esta parte agora vai capturar o erro real, se houver, ao invés do erro de parâmetro
+        print(f"❌ Erro real ao salvar arquivo temporário: {e}")
         raise HTTPException(status_code=500, detail="Erro ao salvar arquivo no servidor.")
 
     task_id = str(uuid.uuid4())
@@ -564,14 +566,14 @@ async def process_file_endpoint(
         "progress": 0,
         "file_path": None
     }
-    
+
     background_tasks.add_task(
         perform_conversion_task, temp_file_path, voice, task_id, use_gemini, book_title
     )
-    
-    salvar_conversion_tasks() # Salva o estado inicial da tarefa
+
+    salvar_conversion_tasks()
     print(f"✅ Tarefa {task_id} iniciada para o arquivo {file.filename}.")
-    
+
     return JSONResponse({"task_id": task_id})
 
 @app.get("/status/{task_id}", response_class=JSONResponse)
