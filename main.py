@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,10 +23,10 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 cached_voices = {}
 conversion_tasks = {}
-NGROK_AUTH_TOKEN = None
-PUBLIC_NGROK_URL = None
+# NGROK_AUTH_TOKEN e PUBLIC_NGROK_URL removidos
+# import pyngrok removido
 
-
+# Função para extrair texto de diferentes tipos de arquivo
 async def get_text_from_file(file_path: str, task_id: str):
     text = ""
     filename = os.path.basename(file_path)
@@ -169,6 +168,8 @@ async def read_root():
     with open("static/index.html", "r", encoding="utf-8") as f:
         return f.read()
 
+# Rota /set_ngrok_token removida
+
 @app.get("/voices", response_class=JSONResponse)
 async def list_voices_endpoint():
     voices = await get_available_voices()
@@ -176,6 +177,7 @@ async def list_voices_endpoint():
 
 @app.post("/process_file")
 async def process_file_endpoint(file: UploadFile = File(...), voice: str = "pt-BR-ThalitaMultilingualNeural", background_tasks: BackgroundTasks = BackgroundTasks()):
+    # Verificação de NGROK_AUTH_TOKEN removida
     
     current_available_voices = await get_available_voices()
     if voice not in current_available_voices:

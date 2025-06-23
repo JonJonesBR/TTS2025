@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -130,43 +129,11 @@
             text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
             z-index: 1;
         }
-        .ngrok-setup {
-            background-color: #e6f7ff;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 30px;
-            border: 1px solid #91d5ff;
-        }
-        .ngrok-setup h2 {
-            color: #0056b3;
-            margin-top: 0;
-            font-size: 1.5em;
-        }
-        .ngrok-setup ol {
-            text-align: left;
-            margin-bottom: 20px;
-            line-height: 1.8;
-            font-size: 0.95em;
-            color: #444;
-        }
-        .ngrok-setup ol li strong {
-            color: #003a7a;
-        }
+        /* Remover ngrok-setup e form-section display:none; aqui */
         .form-section {
-            display: none;
+            /* display: none; -- REMOVIDO PARA SEMPRE MOSTRAR O FORM */
         }
-        .ngrok-url-display {
-            margin-top: 15px;
-            padding: 10px;
-            background-color: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-            border-radius: 6px;
-            font-weight: bold;
-            display: none;
-            word-wrap: break-word;
-            text-align: left;
-        }
+        /* As classes .ngrok-setup, .ngrok-url-display etc. foram removidas do HTML */
         @media (max-width: 768px) {
             .container {
                 margin: 10px;
@@ -188,11 +155,11 @@
 <body>
     <div class="container">
         <h1>Crie seu Audiobook Gratuitamente</h1>
-        <p>Faça o upload de um arquivo PDF, TXT, EPUB, DOC/DOCX e converta-o em audiobook em segundos.</p>        
-        </div>
+        <p>Faça o upload de um arquivo PDF, TXT, EPUB, DOC/DOCX e converta-o em audiobook em segundos.</p>
+        <!-- A DIV 'ngrok-setup' FOI REMOVIDA DAQUI -->
 
         <form id="uploadForm" enctype="multipart/form-data" class="form-section">
-            <h2>Passo 2: Gerar seu Audiobook</h2>
+            <h2>Gerar seu Audiobook</h2>
             <label for="voiceSelect">Escolha a Voz:</label>
             <select id="voiceSelect" name="voice">
                 </select>
@@ -210,6 +177,7 @@
     </div>
 
     <script>
+        // Variáveis ngrok-related foram removidas
         const uploadForm = document.getElementById('uploadForm');
         const fileInput = document.getElementById('fileInput');
         const voiceSelect = document.getElementById('voiceSelect');
@@ -255,7 +223,8 @@
 
         function clearAllMessages() {
             messageDiv.style.display = 'none';
-            errorDiv.style.display = 'none';           
+            errorDiv.style.display = 'none';
+            // Variáveis ngrok-related de mensagem também foram removidas daqui
             clearInterval(pollingInterval);
             progressContainer.style.display = 'none';
             progressBar.style.width = '0%';
@@ -274,6 +243,7 @@
                         option.textContent = voices[code];
                         voiceSelect.appendChild(option);
                     }
+                    // Tenta selecionar Thalita como padrão, se disponível
                     if (voices["pt-BR-ThalitaMultilingualNeural"]) {
                         voiceSelect.value = "pt-BR-ThalitaMultilingualNeural";
                     }
@@ -285,6 +255,13 @@
                 showStatus(errorDiv, 'Erro de conexão ao carregar vozes. Verifique o servidor.', true);
             }
         }
+
+        // Chame loadVoices() ao carregar a página, já que não há mais configuração ngrok
+        document.addEventListener('DOMContentLoaded', (event) => {
+            loadVoices();
+        });
+
+        // Lógica ngrok-related de setNgrokTokenButton.addEventListener foi removida
 
         uploadForm.addEventListener('submit', async function(event) {
             event.preventDefault();
