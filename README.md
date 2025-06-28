@@ -1,73 +1,81 @@
-# 🔊 TTS2025: Gerador de Audiobook Gratuito (PDF, TXT, EPUB, DOC/DOCX para MP3)
+# 🔊 Audiobook Generator: Seu Leitor de Livros Pessoal
+
+Transforme seus documentos e e-books em audiobooks com vozes naturais e de alta qualidade. Perfeito para ouvir seus textos em qualquer lugar!
+
+**Acesse o aplicativo aqui:** [https://tts-master.onrender.com/](https://tts-master.onrender.com/)
 
 ![Python](https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![Google Colab](https://img.shields.io/badge/Colab-F9AB00?style=for-the-badge&logo=googlecolab&logoColor=white)
 ![Edge TTS](https://img.shields.io/badge/Edge%20TTS-0078D4?style=for-the-badge&logo=microsoftedge&logoColor=white)
 
-Este repositório contém o código-fonte de um projeto simples para converter documentos de texto (PDF, TXT, EPUB, DOC/DOCX) em arquivos de áudio MP3 (audiobooks) usando a tecnologia de Text-to-Speech (TTS) da Microsoft Edge. O projeto foi desenvolvido inicialmente no Google Colab e utiliza FastAPI para o backend e um frontend HTML/JavaScript para interação.
+## O que o Audiobook Generator faz?
 
-## 🚀 Visão Geral
+Este aplicativo web gratuito converte seus arquivos de texto em áudio (MP3) que você pode baixar e ouvir quando quiser. É como ter alguém lendo seus documentos ou livros favoritos para você.
 
-O TTS2025 oferece uma solução prática e gratuita para transformar seus documentos em áudio. Ele permite que usuários façam upload de um arquivo e escolham entre diversas vozes disponíveis (principalmente vozes brasileiras, incluindo a Thalita Neural) para gerar um audiobook.
+Ele suporta os formatos de arquivo mais comuns:
+* **PDF**
+* **TXT**
+* **EPUB** (formato padrão para e-books)
+* **DOC** e **DOCX** (arquivos do Microsoft Word)
 
-**Funcionalidades Principais:**
+## Como Usar: Um Guia Passo a Passo
 
-* **Suporte a Múltiplos Formatos:** Converte arquivos `.pdf`, `.txt`, `.epub`, `.doc` e `.docx`.
-* **Vozes Naturais:** Utiliza as vozes de alta qualidade da Microsoft Edge TTS, incluindo a popular voz "Thalita" em português do Brasil.
-* **Processamento Assíncrono:** As conversões são realizadas em segundo plano, permitindo que o usuário acompanhe o progresso.
-* **Frontend Intuitivo:** Uma interface web simples para upload de arquivos e seleção de voz.
-* **Download Direto:** O audiobook gerado é disponibilizado para download diretamente pelo navegador.
+Siga estes passos simples para criar seu primeiro audiobook.
 
-## ⚙️ Como Funciona
+### Passo 1: Acesse o Site
 
-1.  **Upload do Arquivo:** O usuário faz upload de um documento via interface web.
-2.  **Extração de Texto:** O backend extrai o texto do documento uploaded, tratando diferentes formatos (PDF, DOCX, EPUB, TXT).
-3.  **Conversão TTS:** O texto extraído é enviado para a API do Edge TTS, que o converte em áudio.
-4.  **Geração do MP3:** O áudio é streamado e salvo como um arquivo MP3.
-5.  **Download e Limpeza:** O usuário pode baixar o audiobook. Após o download, o arquivo gerado e os arquivos temporários são automaticamente limpos para economizar espaço e manter a privacidade.
+Clique no link a seguir para abrir o aplicativo no seu navegador:
+[**tts-master.onrender.com**](https://tts-master.onrender.com/)
 
-## 🛠️ Tecnologias Utilizadas
+### Passo 2: Escolha uma Voz
 
-* **Backend:**
-    * [FastAPI](https://fastapi.tiangolo.com/): Framework web para construção de APIs rápidas e assíncronas.
-    * [PyPDF2](https://pypdf2.readthedocs.io/): Para extração de texto de arquivos PDF.
-    * [python-docx](https://python-docx.readthedocs.io/): Para extração de texto de arquivos DOCX.
-    * [EbookLib](https://github.com/aerkalov/ebooklib): Para manipulação de arquivos EPUB.
-    * [BeautifulSoup4](https://www.crummy.com/software/BeautifulSoup/bs4/doc/): Usado em conjunto com EbookLib para parsing HTML em EPUBs.
-    * [edge-tts](https://github.com/rany2/edge-tts): Biblioteca para interfacear com o serviço de Text-to-Speech da Microsoft Edge.
-* **Frontend:**
-    * HTML, CSS, JavaScript Puro.
-* **Implantação/Ambiente de Desenvolvimento (Exemplo):**
-    * [Google Colab](https://colab.research.google.com/): Ambiente de notebook para desenvolvimento e execução inicial.
-    * [Uvicorn](https://www.uvicorn.org/): Servidor ASGI para rodar aplicações FastAPI.
-    * [ngrok](https://ngrok.com/): Para expor o servidor local do Colab à internet.
+No menu suspenso "Escolha a Voz", você encontrará várias opções de vozes em português do Brasil, incluindo as populares vozes neurais (como a "Thalita"), que soam muito naturais. Selecione a que você mais gosta.
 
-## 🚀 Como Rodar o Projeto (no Google Colab)
+### Passo 3: Faça o Upload do seu Arquivo
 
-Este projeto é otimizado para ser executado no Google Colab, onde todas as dependências são facilmente instaladas e o servidor pode ser exposto publicamente via ngrok.
+1.  Clique no botão **"Escolher arquivo"**.
+2.  Selecione o documento (PDF, TXT, EPUB, DOC/DOCX) do seu computador que você deseja converter.
 
-1.  **Abra o Notebook:** Faça upload do arquivo `tts2025.py` (ou `TTS2025.ipynb` se você o salvou como notebook) para o Google Colab.
-2.  **Execute as Células:**
-    * **Célula 1: Instalar Bibliotecas:** Execute a primeira célula para instalar todas as dependências Python necessárias.
-    * **Célula 2: Criar Pastas:** Execute a célula para criar os diretórios `uploads`, `audiobooks` e `static`.
-    * **Célula 3: Criar `main.py`:** Execute esta célula (`%%writefile main.py`). Ela irá criar o arquivo principal da API FastAPI.
-    * **Célula 4: Criar `index.html`:** Execute esta célula (`%%writefile static/index.html`). Ela irá criar o arquivo HTML do frontend na pasta `static`.
-    * **Célula 5: Iniciar Uvicorn e ngrok:** **IMPORTANTE:** Antes de executar esta célula, você precisará obter seu próprio `NGROK_AUTH_TOKEN` em [ngrok.com](https://ngrok.com/). Substitua `"2xbaQNvi6miSZUVf8MzgZAQfTh6_t2wYSecnyeuys1qhr5vc"` pelo seu token real.
-        ```python
-        # SUBSTITUA "SEU_AUTH_TOKEN_AQUI" PELO SEU TOKEN REAL
-        ngrok.set_auth_token("SEU_AUTH_TOKEN_AQUI")
-        ```
-        Após configurar o token, execute esta célula. Ela iniciará o servidor FastAPI e fornecerá uma URL pública do ngrok.
-3.  **Acesse o Projeto:** Copie a URL gerada pelo ngrok (geralmente algo como `https://xxxxx.ngrok-free.app`) e cole-a no seu navegador. Você verá a interface do gerador de audiobook.
+### Passo 4 (Opcional): Adicione um Título
 
-## 🤝 Contribuição
+Você pode dar um nome ao seu livro no campo "Título do Livro". Isso ajuda a organizar seus audiobooks baixados.
 
-Contribuições são bem-vindas! Sinta-se à vontade para abrir issues para bugs ou sugestões de novas funcionalidades, ou envie pull requests.
+### Passo 5 (Opcional, mas recomendado): Aprimoramento com IA (Google Gemini)
 
-## 📜 Licença
+Para uma qualidade de áudio ainda melhor, você pode usar a inteligência artificial do Google para revisar e formatar o texto antes da conversão. Isso corrige a pontuação para uma narração mais fluida e expande abreviações (como "Dr." para "Doutor").
 
-Este projeto está licenciado sob a Licença MIT. Consulte o arquivo `LICENSE` (se houver) para mais detalhes.
+**Como ativar:**
+1.  Obtenha uma chave de API gratuita do Google AI Studio:
+    * Acesse **[aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)**.
+    * Faça login com sua conta Google e clique em "**Create API Key in new project**".
+    * Copie a chave gerada.
+2.  No site do Audiobook Generator, cole a chave no campo "**Sua Chave API do Google Gemini**" e clique em "**Salvar Chave API**".
+3.  Marque a caixa de seleção "**Usar IA Gemini para aprimorar o texto**".
+
+### Passo 6: Gere seu Audiobook!
+
+1.  Clique no botão azul **"Gerar Audiobook"**.
+2.  Aguarde enquanto o aplicativo processa seu arquivo. Você verá uma barra de progresso mostrando o andamento da conversão.
+3.  Quando o processo terminar, o download do arquivo MP3 começará automaticamente!
+
+Pronto! Agora você pode ouvir seu documento ou livro em qualquer dispositivo que toque arquivos de áudio.
+
+## Recursos Principais
+
+* **Totalmente Gratuito:** Sem custos ou assinaturas.
+* **Vozes de Alta Qualidade:** Utiliza a tecnologia Text-to-Speech da Microsoft para criar áudios que soam como uma pessoa de verdade.
+* **Fácil de Usar:** Interface simples e intuitiva, projetada para todos.
+* **Privacidade:** Seus arquivos são processados e depois excluídos do servidor para garantir sua privacidade.
+
+## Para Desenvolvedores
+
+Este projeto foi construído com as seguintes tecnologias:
+
+* **Backend:** FastAPI (Python)
+* **Frontend:** HTML, CSS e JavaScript
+* **Conversão de Texto:** `edge-tts` e bibliotecas de extração como `PyPDF2` e `python-docx`.
+
+Se você tiver interesse em contribuir ou executar o projeto localmente, sinta-se à vontade para explorar os arquivos no repositório.
 
 ---
 Feito com ❤️ por [JonJonesBR](https://github.com/JonJonesBR)
